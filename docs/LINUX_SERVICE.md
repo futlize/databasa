@@ -42,6 +42,32 @@ O instalador cria:
 - unit systemd com restart automatico em falha e habilitado no boot
 - helper CLI em `/usr/local/bin/databasa`
 
+## Atualizacao
+
+Para atualizar em servidor ja instalado, execute novamente o instalador.
+Ele atualiza o binario e reinicia o servico, mantendo a config existente em `/etc/databasa/databasa.toml`.
+
+Atualizar para a release mais recente (`latest`):
+
+```bash
+cd ~/databasa/scripts
+sudo ./install.sh
+```
+
+Atualizar para uma tag especifica:
+
+```bash
+cd ~/databasa/scripts
+sudo DATABASA_RELEASE_TAG=v0.1.1 ./install.sh
+```
+
+Validar depois da atualizacao:
+
+```bash
+databasa status
+databasa logs --follow
+```
+
 ## Layout FHS
 
 - Config: `/etc/databasa/` (arquivo principal: `/etc/databasa/databasa.toml`)
