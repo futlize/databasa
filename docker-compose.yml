@@ -1,0 +1,24 @@
+services:
+  databasa:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${DATABASA_CONTAINER_NAME:-databasa}
+    restart: unless-stopped
+    ports:
+      - "${DATABASA_BIND_IP:-127.0.0.1}:${DATABASA_PORT:-50051}:50051"
+    volumes:
+      - ${DATABASA_DATA_DIR:-./data}:/app/data
+    cpus: "${DATABASA_CPU_LIMIT:-1.0}"
+    mem_limit: ${DATABASA_MEMORY_LIMIT:-2g}
+    memswap_limit: ${DATABASA_MEMORY_LIMIT:-2g}
+    pids_limit: ${DATABASA_PIDS_LIMIT:-256}
+    ulimits:
+      nofile:
+        soft: ${DATABASA_NOFILE_SOFT:-65536}
+        hard: ${DATABASA_NOFILE_HARD:-65536}
+    logging:
+      driver: json-file
+      options:
+        max-size: "${DATABASA_LOG_MAX_SIZE:-10m}"
+        max-file: "${DATABASA_LOG_MAX_FILE:-3}"

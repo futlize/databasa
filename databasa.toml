@@ -1,0 +1,32 @@
+# Databasa server configuration (Ubuntu/Linux recommended)
+# Path sugerido: /etc/databasa/databasa.toml
+
+[server]
+port = 50051
+grpc_max_recv_mb = 64
+grpc_max_send_mb = 64
+enable_reflection = false
+
+[storage]
+data_dir = /var/lib/databasa/data
+shards = 8
+index_flush_ops = 4096
+compression = int8
+
+[guardrails]
+max_top_k = 200
+max_batch_size = 512
+max_ef_search = 1024
+max_collection_dim = 8192
+max_concurrent_search = 32
+max_concurrent_write = 64
+max_data_dir_mb = 102400
+require_rpc_deadline = true
+
+[resources]
+# 0 = auto (min(NumCPU/2, 8))
+max_workers = 0
+memory_budget_percent = 80
+insert_queue_size = 4096
+# Em carga massiva de ingestao: true (e depois volte para false)
+bulk_load_mode = false

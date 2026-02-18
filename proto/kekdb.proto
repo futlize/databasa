@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package kekdb;
+
+option go_package = "github.com/juniodev/kekdb/pkg/pb";
+
+// ─── Enums ───────────────────────────────────────────────
+
+enum Metric {
+  COSINE = 0;
+  L2 = 1;
+  DOT_PRODUCT = 2;
+}
+
+// ─── Collection ──────────────────────────────────────────
+
+message CreateCollectionRequest {
+  string name = 1;
+  uint32 dimension = 2;
+  Metric metric = 3;
+}
+
+message CreateCollectionResponse {}
+
+message DeleteCollectionRequest {
+  string name = 1;
+}
+
+message DeleteCollectionResponse {}
+
+message CollectionInfo {
+  string name = 1;
+  uint32 dimension = 2;
+  Metric metric = 3;
+  uint64 count = 4;
+  bool has_index = 5;
+}
+
+message ListCollectionsRequest {}
+
+message ListCollectionsResponse {
+  repeated CollectionInfo collections = 1;
+}
+
+// ─── Index ───────────────────────────────────────────────
+
+message CreateIndexRequest {
+  string collection = 1;
+  uint32 m = 2;              // max connections per node (default 16)
+  uint32 ef_construction = 3; // build-time beam width (default 200)
+}
+
+message CreateIndexResponse {}
+
+message DropIndexRequest {
+  string collection = 1;
+}
+
+message DropIndexResponse {}
+
+// ─── Insert / Get / Delete ───────────────────────────────
+
+message InsertRequest {
+  string collection = 1;
+  string key = 2;
+  repeated float embedding = 3;
+}
+
+message InsertResponse {}
+
+message GetRequest {
+  string collection = 1;
+  string key = 2;
+}
+
+message GetResponse {
+  string key = 1;
+  repeated float embedding = 2;
+}
+
+message DeleteRequest {
+  string collection = 1;
+  string key = 2;
+}
+
+message DeleteResponse {}
+
+// ─── Search ──────────────────────────────────────────────
+
+message SearchRequest {
+  string collection = 1;
+  repeated float embedding = 2;
+  uint32 top_k = 3;
+  uint32 ef_search = 4; // search beam width (default 50, 0 = use default)
+  bool include_embedding = 5; // when true, SearchResult may include full embedding payload
+}
+
+message SearchResult {
+  string key = 1;
+  float score = 2; // distance (lower = more similar for L2/cosine)
+  repeated float embedding = 3; // optional payload; filled when requested
+}
+
+message SearchResponse {
+  repeated SearchResult results = 1;
+}
+
+// ─── Batch ───────────────────────────────────────────────
+
+message BatchInsertItem {
+  string key = 1;
+  repeated float embedding = 2;
+}
+
+message BatchInsertRequest {
+  string collection = 1;
+  repeated BatchInsertItem items = 2;
+}
+
+message BatchInsertResponse {
+  uint64 inserted = 1;
+}
+
+// ─── Service ─────────────────────────────────────────────
+
+service KekDB {
+  // Collection management
+  rpc CreateCollection(CreateCollectionRequest) returns (CreateCollectionResponse);
+  rpc DeleteCollection(DeleteCollectionRequest) returns (DeleteCollectionResponse);
+  rpc ListCollections(ListCollectionsRequest) returns (ListCollectionsResponse);
+
+  // Index management (optional — creates HNSW index for fast search)
+  rpc CreateIndex(CreateIndexRequest) returns (CreateIndexResponse);
+  rpc DropIndex(DropIndexRequest) returns (DropIndexResponse);
+
+  // Data operations
+  rpc Insert(InsertRequest) returns (InsertResponse);
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc BatchInsert(BatchInsertRequest) returns (BatchInsertResponse);
+
+  // Similarity search
+  rpc Search(SearchRequest) returns (SearchResponse);
+}
