@@ -42,7 +42,6 @@ type config struct {
 	embeddedListen       string
 	embeddedDataDir      string
 	embeddedShards       int
-	embeddedIndexFlush   int
 	embeddedCompression  string
 	embeddedKeepDataPath bool
 }
@@ -88,7 +87,6 @@ func parseFlags() config {
 	flag.StringVar(&cfg.embeddedListen, "embedded-listen", "127.0.0.1:0", "listen address for embedded server")
 	flag.StringVar(&cfg.embeddedDataDir, "embedded-data-dir", "", "data directory for embedded server (default: temporary under ./data)")
 	flag.IntVar(&cfg.embeddedShards, "embedded-shards", 8, "number of shards for embedded server")
-	flag.IntVar(&cfg.embeddedIndexFlush, "embedded-index-flush-ops", 0, "index flush ops for embedded server (0 disables periodic flush)")
 	flag.StringVar(&cfg.embeddedCompression, "embedded-compression", "int8", "compression for embedded server: int8|none")
 	flag.BoolVar(&cfg.embeddedKeepDataPath, "keep-data", false, "keep embedded data directory after benchmark")
 
@@ -251,7 +249,7 @@ func startEmbeddedServer(cfg config) (addr string, stop func(), dataDir string, 
 		dataDir = tempDir
 	}
 
-	srv, err := server.NewWithConfig(dataDir, cfg.embeddedShards, cfg.embeddedIndexFlush, strings.ToLower(cfg.embeddedCompression))
+	srv, err := server.NewWithConfig(dataDir, cfg.embeddedShards, strings.ToLower(cfg.embeddedCompression))
 	if err != nil {
 		return "", nil, "", fmt.Errorf("create embedded server: %w", err)
 	}

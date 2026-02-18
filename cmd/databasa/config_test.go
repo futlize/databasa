@@ -37,7 +37,7 @@ port = 60051 ; grpc port
 
 [storage]
 data_dir = ./custom-data
-index_flush_ops = 0
+write_mode = performance
 
 [guardrails]
 max_top_k = 42 # max returned docs
@@ -62,8 +62,8 @@ max_data_dir_mb = 256
 	if cfg.Storage.DataDir != "./custom-data" {
 		t.Fatalf("unexpected data dir: %q", cfg.Storage.DataDir)
 	}
-	if cfg.Storage.IndexFlushOps != 0 {
-		t.Fatalf("expected explicit index_flush_ops=0 to be preserved, got=%d", cfg.Storage.IndexFlushOps)
+	if cfg.Storage.WriteMode != "performance" {
+		t.Fatalf("unexpected write_mode: %q", cfg.Storage.WriteMode)
 	}
 	if cfg.Guardrails.MaxTopK != 42 {
 		t.Fatalf("unexpected max_top_k: %d", cfg.Guardrails.MaxTopK)
@@ -73,5 +73,61 @@ max_data_dir_mb = 256
 	}
 	if cfg.Guardrails.MaxBatchSize != defaults.Guardrails.MaxBatchSize {
 		t.Fatalf("expected default max_batch_size=%d, got=%d", defaults.Guardrails.MaxBatchSize, cfg.Guardrails.MaxBatchSize)
+	}
+}
+
+func TestLoadOrCreateConfigNormalizesInvalidWriteMode(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "databasa.toml")
+	content := `
+[storage]
+write_mode = ultra
+wal_sync_mode = unknown
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, created, err := LoadOrCreateConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if created {
+		t.Fatalf("did not expect config creation when file already exists")
+	}
+
+	if cfg.Storage.WriteMode != "strict" {
+		t.Fatalf("expected normalized write_mode=strict, got=%q", cfg.Storage.WriteMode)
+	}
+	if cfg.Storage.WALSyncMode != "auto" {
+		t.Fatalf("expected normalized wal_sync_mode=auto, got=%q", cfg.Storage.WALSyncMode)
+	}
+}
+
+func TestLoadOrCreateConfigIgnoresLegacyResourcesSection(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "databasa.toml")
+	content := `
+[storage]
+data_dir = ./data
+
+[resources]
+max_workers = 64
+memory_budget_percent = 99
+insert_queue_size = 1
+bulk_load_mode = true
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, created, err := LoadOrCreateConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if created {
+		t.Fatalf("did not expect config creation when file already exists")
+	}
+
+	if cfg.Storage.DataDir != "./data" {
+		t.Fatalf("unexpected data_dir: %q", cfg.Storage.DataDir)
 	}
 }

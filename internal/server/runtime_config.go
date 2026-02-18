@@ -2,20 +2,15 @@ package server
 
 import (
 	"sync"
-
-	"github.com/futlize/databasa/internal/resources"
 )
 
 type RuntimeConfig struct {
-	MaxWorkers          int
-	MemoryBudgetPercent int
-	InsertQueueSize     int
-	BulkLoadMode        bool
+	WriteAdmissionMode string
 }
 
 var (
 	runtimeCfgMu sync.RWMutex
-	runtimeCfg   = fromResourceConfig(resources.ConfigureGlobal(resources.DefaultConfig()))
+	runtimeCfg   = normalizeRuntimeConfig(RuntimeConfig{})
 )
 
 func DefaultRuntimeConfig() RuntimeConfig {
@@ -30,7 +25,6 @@ func SetDefaultRuntimeConfig(cfg RuntimeConfig) RuntimeConfig {
 	runtimeCfgMu.Lock()
 	runtimeCfg = normalized
 	runtimeCfgMu.Unlock()
-	resources.ConfigureGlobal(toResourceConfig(normalized))
 	return normalized
 }
 
@@ -42,23 +36,12 @@ func currentRuntimeConfig() RuntimeConfig {
 }
 
 func normalizeRuntimeConfig(cfg RuntimeConfig) RuntimeConfig {
-	return fromResourceConfig(resources.NormalizeConfig(toResourceConfig(cfg)))
-}
-
-func toResourceConfig(cfg RuntimeConfig) resources.Config {
-	return resources.Config{
-		MaxWorkers:          cfg.MaxWorkers,
-		MemoryBudgetPercent: cfg.MemoryBudgetPercent,
-		InsertQueueSize:     cfg.InsertQueueSize,
-		BulkLoadMode:        cfg.BulkLoadMode,
+	normalized := RuntimeConfig{}
+	switch cfg.WriteAdmissionMode {
+	case "strict", "performance":
+		normalized.WriteAdmissionMode = cfg.WriteAdmissionMode
+	default:
+		normalized.WriteAdmissionMode = "strict"
 	}
-}
-
-func fromResourceConfig(cfg resources.Config) RuntimeConfig {
-	return RuntimeConfig{
-		MaxWorkers:          cfg.MaxWorkers,
-		MemoryBudgetPercent: cfg.MemoryBudgetPercent,
-		InsertQueueSize:     cfg.InsertQueueSize,
-		BulkLoadMode:        cfg.BulkLoadMode,
-	}
+	return normalized
 }

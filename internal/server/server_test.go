@@ -399,7 +399,7 @@ func extractSearchResultEmbedding(result *pb.SearchResult) []float32 {
 }
 
 func TestServerDistributedSearchMergeTopK(t *testing.T) {
-	srv, err := NewWithConfig(t.TempDir(), 4, 1, "none")
+	srv, err := NewWithConfig(t.TempDir(), 4, "none")
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -497,35 +497,86 @@ func TestServerBatchInsertIndexStaysConsistentOnOverwrite(t *testing.T) {
 	}
 }
 
-func TestNewWithConfigIndexFlushOpsSupportsZero(t *testing.T) {
-	srvDisabled, err := NewWithConfig(t.TempDir(), 2, 0, "none")
+func TestServerPersistsIndexConfigAcrossRestart(t *testing.T) {
+	dataDir := t.TempDir()
+	ctx := context.Background()
+
+	srv, err := New(dataDir)
 	if err != nil {
-		t.Fatalf("new server with flush disabled: %v", err)
-	}
-	defer srvDisabled.Close()
-	if srvDisabled.indexFlushOps != 0 {
-		t.Fatalf("expected index flush ops to stay 0, got %d", srvDisabled.indexFlushOps)
+		t.Fatalf("new server: %v", err)
 	}
 
-	srvDefault, err := NewWithConfig(t.TempDir(), 2, -1, "none")
-	if err != nil {
-		t.Fatalf("new server with default flush: %v", err)
+	if _, err := srv.CreateCollection(ctx, &pb.CreateCollectionRequest{
+		Name:      "docs",
+		Dimension: 2,
+		Metric:    pb.Metric_L2,
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
 	}
-	defer srvDefault.Close()
-	if srvDefault.indexFlushOps != defaultIndexFlushOps {
-		t.Fatalf("expected default index flush ops %d, got %d", defaultIndexFlushOps, srvDefault.indexFlushOps)
+	if _, err := srv.CreateIndex(ctx, &pb.CreateIndexRequest{
+		Collection:     "docs",
+		M:              24,
+		EfConstruction: 90,
+	}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+
+	srv.mu.RLock()
+	col := srv.collections["docs"]
+	cfg := col.indexConfig
+	srv.mu.RUnlock()
+	if cfg.M != 24 || cfg.EfConstruction != 90 {
+		t.Fatalf("unexpected in-memory index config before restart: %+v", cfg)
+	}
+	srv.Close()
+
+	srv, err = New(dataDir)
+	if err != nil {
+		t.Fatalf("reopen server: %v", err)
+	}
+	defer srv.Close()
+
+	listResp, err := srv.ListCollections(ctx, &pb.ListCollectionsRequest{})
+	if err != nil {
+		t.Fatalf("list collections: %v", err)
+	}
+	if len(listResp.Collections) != 1 || !listResp.Collections[0].HasIndex {
+		t.Fatalf("expected collection index enabled after restart, got: %+v", listResp.Collections)
+	}
+
+	srv.mu.RLock()
+	col = srv.collections["docs"]
+	cfg = col.indexConfig
+	srv.mu.RUnlock()
+	if cfg.M != 24 || cfg.EfConstruction != 90 {
+		t.Fatalf("unexpected index config after restart: %+v", cfg)
+	}
+
+	if _, err := srv.DropIndex(ctx, &pb.DropIndexRequest{Collection: "docs"}); err != nil {
+		t.Fatalf("drop index: %v", err)
+	}
+	srv.Close()
+
+	srv, err = New(dataDir)
+	if err != nil {
+		t.Fatalf("reopen server after drop: %v", err)
+	}
+	defer srv.Close()
+
+	listResp, err = srv.ListCollections(ctx, &pb.ListCollectionsRequest{})
+	if err != nil {
+		t.Fatalf("list collections after drop: %v", err)
+	}
+	if len(listResp.Collections) != 1 || listResp.Collections[0].HasIndex {
+		t.Fatalf("expected collection index disabled after restart, got: %+v", listResp.Collections)
 	}
 }
 
 func TestQueueFullUnderLoadDoesNotDeadlock(t *testing.T) {
-	restoreRuntime := withRuntimeConfig(t, RuntimeConfig{
-		MaxWorkers:          1,
-		InsertQueueSize:     1,
-		MemoryBudgetPercent: DefaultRuntimeConfig().MemoryBudgetPercent,
-	})
+	restoreRuntime := withRuntimeConfig(t, RuntimeConfig{})
 	defer restoreRuntime()
 
-	srv, err := NewWithConfig(t.TempDir(), 1, 0, "none")
+	srv, err := NewWithConfig(t.TempDir(), 1, "none")
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -595,14 +646,10 @@ func TestQueueFullUnderLoadDoesNotDeadlock(t *testing.T) {
 }
 
 func TestCloseCompletesUnderHeavyIngestAndIndexing(t *testing.T) {
-	restoreRuntime := withRuntimeConfig(t, RuntimeConfig{
-		MaxWorkers:          1,
-		InsertQueueSize:     1,
-		MemoryBudgetPercent: DefaultRuntimeConfig().MemoryBudgetPercent,
-	})
+	restoreRuntime := withRuntimeConfig(t, RuntimeConfig{})
 	defer restoreRuntime()
 
-	srv, err := NewWithConfig(t.TempDir(), 1, 0, "none")
+	srv, err := NewWithConfig(t.TempDir(), 1, "none")
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -667,17 +714,7 @@ func TestCloseCompletesUnderHeavyIngestAndIndexing(t *testing.T) {
 func withRuntimeConfig(t *testing.T, cfg RuntimeConfig) func() {
 	t.Helper()
 	prev := DefaultRuntimeConfig()
-	merged := prev
-	if cfg.MaxWorkers > 0 {
-		merged.MaxWorkers = cfg.MaxWorkers
-	}
-	if cfg.InsertQueueSize > 0 {
-		merged.InsertQueueSize = cfg.InsertQueueSize
-	}
-	if cfg.MemoryBudgetPercent > 0 {
-		merged.MemoryBudgetPercent = cfg.MemoryBudgetPercent
-	}
-	merged.BulkLoadMode = cfg.BulkLoadMode
+	merged := normalizeRuntimeConfig(cfg)
 
 	SetDefaultRuntimeConfig(merged)
 	return func() {

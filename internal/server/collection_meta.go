@@ -12,7 +12,7 @@ import (
 
 const (
 	collectionMetaFile    = "collection.meta"
-	collectionMetaVersion = 1
+	collectionMetaVersion = 2
 )
 
 var collectionMetaMagic = [8]byte{'K', 'C', 'O', 'L', 'L', 'M', 'E', '1'}
@@ -23,6 +23,9 @@ type collectionMeta struct {
 	Metric      string
 	Compression string
 	ShardCount  uint32
+	IndexM      uint32
+	IndexEfC    uint32
+	IndexEfS    uint32
 }
 
 func saveCollectionMeta(dir string, meta collectionMeta) error {
@@ -57,6 +60,15 @@ func saveCollectionMeta(dir string, meta collectionMeta) error {
 		return err
 	}
 	if err := binary.Write(&buf, binary.LittleEndian, meta.ShardCount); err != nil {
+		return err
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, meta.IndexM); err != nil {
+		return err
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, meta.IndexEfC); err != nil {
+		return err
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, meta.IndexEfS); err != nil {
 		return err
 	}
 	if err := binary.Write(&buf, binary.LittleEndian, uint16(len(nameBytes))); err != nil {
@@ -94,7 +106,7 @@ func loadCollectionMeta(dir string) (collectionMeta, error) {
 	if err := binary.Read(f, binary.LittleEndian, &version); err != nil {
 		return collectionMeta{}, err
 	}
-	if version != collectionMetaVersion {
+	if version != 1 && version != collectionMetaVersion {
 		return collectionMeta{}, fmt.Errorf("unsupported collection meta version %d", version)
 	}
 
@@ -115,6 +127,21 @@ func loadCollectionMeta(dir string) (collectionMeta, error) {
 	var shardCount uint32
 	if err := binary.Read(f, binary.LittleEndian, &shardCount); err != nil {
 		return collectionMeta{}, err
+	}
+
+	var indexM uint32
+	var indexEfC uint32
+	var indexEfS uint32
+	if version >= 2 {
+		if err := binary.Read(f, binary.LittleEndian, &indexM); err != nil {
+			return collectionMeta{}, err
+		}
+		if err := binary.Read(f, binary.LittleEndian, &indexEfC); err != nil {
+			return collectionMeta{}, err
+		}
+		if err := binary.Read(f, binary.LittleEndian, &indexEfS); err != nil {
+			return collectionMeta{}, err
+		}
 	}
 
 	var nameLen uint16
@@ -144,6 +171,9 @@ func loadCollectionMeta(dir string) (collectionMeta, error) {
 		Metric:      metric,
 		Compression: compression,
 		ShardCount:  shardCount,
+		IndexM:      indexM,
+		IndexEfC:    indexEfC,
+		IndexEfS:    indexEfS,
 	}, nil
 }
 

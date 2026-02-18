@@ -262,17 +262,15 @@ max_top_k = 256
 max_batch_size = 1000
 max_ef_search = 4096
 max_collection_dim = 8192
-max_concurrent_search = 64
-max_concurrent_write = 128
 max_data_dir_mb = 0
 require_rpc_deadline = false
 ```
 
-When concurrency limits are exceeded, server returns:
-- `RESOURCE_EXHAUSTED`
-
 When `max_data_dir_mb` is reached, write operations also return:
 - `RESOURCE_EXHAUSTED`
+
+Observacao:
+- O servidor nao aplica mais limite interno de slots de concorrencia por request (search/write).
 
 ## 6) Minimal grpcurl examples
 

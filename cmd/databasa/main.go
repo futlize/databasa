@@ -9,8 +9,11 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/futlize/databasa/internal/hnsw"
 	"github.com/futlize/databasa/internal/server"
+	"github.com/futlize/databasa/internal/storage"
 	pb "github.com/futlize/databasa/pkg/pb"
 
 	"google.golang.org/grpc"
@@ -26,51 +29,64 @@ func main() {
 	configPath := flag.String("config", defaultPath, "path to Databasa config file (TOML style). Env override: DATABASA_CONFIG")
 	flag.Parse()
 
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	log.SetFlags(log.LstdFlags)
 
 	cfg, created, err := LoadOrCreateConfig(*configPath)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		fatalStartup("load configuration", err)
 	}
 	if created {
-		log.Printf("Created default config at %s", *configPath)
-	}
-
-	if envBulk := strings.TrimSpace(os.Getenv("BULK_LOAD_MODE")); envBulk != "" {
-		b, err := parseBool(envBulk)
-		if err != nil {
-			log.Fatalf("Invalid BULK_LOAD_MODE=%q: %v", envBulk, err)
-		}
-		cfg.Resources.BulkLoadMode = b
+		log.Printf("INFO created default config at %s", *configPath)
 	}
 
 	server.SetDefaultRuntimeConfig(server.RuntimeConfig{
-		MaxWorkers:          cfg.Resources.MaxWorkers,
-		MemoryBudgetPercent: cfg.Resources.MemoryBudgetPercent,
-		InsertQueueSize:     cfg.Resources.InsertQueueSize,
-		BulkLoadMode:        cfg.Resources.BulkLoadMode,
+		WriteAdmissionMode: cfg.Storage.WriteMode,
 	})
+	walMode := walSyncModeFromConfig(cfg.Storage.WriteMode, cfg.Storage.WALSyncMode)
+	storageOpts := storage.Options{
+		ActivePartitionMaxOps:   cfg.Storage.ActivePartitionMaxOps,
+		ActivePartitionMaxBytes: uint64(cfg.Storage.ActivePartitionMaxBytesMB) * 1024 * 1024,
+		PartitionMaxCount:       cfg.Storage.PartitionMaxCount,
+		PartitionMergeFanIn:     cfg.Storage.PartitionMergeFanIn,
+		PartitionIndexMinRows:   cfg.Storage.PartitionIndexMinRows,
+		SealCheckInterval:       250 * time.Millisecond,
+		MergeCheckInterval:      2 * time.Second,
+		IndexRescanEvery:        1 * time.Second,
+		IndexWorkers:            cfg.Storage.IndexWorkers,
+		MergeWorkers:            cfg.Storage.MergeWorkers,
+		OptimizerQueueCap:       cfg.Storage.OptimizerQueueCap,
+		WALSyncMode:             walMode,
+		WALQueueSize:            cfg.Storage.WALQueueSize,
+		WALBatchMaxOps:          cfg.Storage.WALBatchMaxOps,
+		WALBatchWait:            time.Duration(cfg.Storage.WALBatchWaitMS) * time.Millisecond,
+		WALSyncInterval:         time.Duration(cfg.Storage.WALSyncIntervalMS) * time.Millisecond,
+		ANNEnabled:              false,
+		HNSWConfig: hnsw.Config{
+			M:              cfg.Storage.IndexM,
+			MMax0:          cfg.Storage.IndexM * 2,
+			EfConstruction: cfg.Storage.IndexEfConstruction,
+			EfSearch:       cfg.Storage.IndexEfSearch,
+		},
+	}
+	server.SetDefaultStorageOptions(storageOpts)
 
 	// Initialize server
 	srv, err := server.NewWithConfig(
 		cfg.Storage.DataDir,
 		cfg.Storage.Shards,
-		cfg.Storage.IndexFlushOps,
 		cfg.Storage.Compression,
 	)
 	if err != nil {
-		log.Fatalf("Failed to create server: %v", err)
+		fatalStartup("initialize server", err)
 	}
 	defer srv.Close()
 	srv.ConfigureGuardrails(server.GuardrailConfig{
-		MaxTopK:             uint32(cfg.Guardrails.MaxTopK),
-		MaxBatchSize:        cfg.Guardrails.MaxBatchSize,
-		MaxEfSearch:         uint32(cfg.Guardrails.MaxEfSearch),
-		MaxCollectionDim:    uint32(cfg.Guardrails.MaxCollectionDim),
-		MaxConcurrentSearch: cfg.Guardrails.MaxConcurrentSearch,
-		MaxConcurrentWrite:  cfg.Guardrails.MaxConcurrentWrite,
-		MaxDataDirBytes:     int64(cfg.Guardrails.MaxDataDirMB) * 1024 * 1024,
-		RequireRPCDeadline:  cfg.Guardrails.RequireRPCDeadline,
+		MaxTopK:            uint32(cfg.Guardrails.MaxTopK),
+		MaxBatchSize:       cfg.Guardrails.MaxBatchSize,
+		MaxEfSearch:        uint32(cfg.Guardrails.MaxEfSearch),
+		MaxCollectionDim:   uint32(cfg.Guardrails.MaxCollectionDim),
+		MaxDataDirBytes:    int64(cfg.Guardrails.MaxDataDirMB) * 1024 * 1024,
+		RequireRPCDeadline: cfg.Guardrails.RequireRPCDeadline,
 	})
 
 	// Create gRPC server
@@ -88,7 +104,7 @@ func main() {
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
-		log.Fatalf("Failed to listen on %s: %v", addr, err)
+		fatalStartup(fmt.Sprintf("bind listener on %s", addr), err)
 	}
 
 	// Graceful shutdown
@@ -100,17 +116,29 @@ func main() {
 		grpcServer.GracefulStop()
 	}()
 
-	log.Printf("Databasa server listening on %s", addr)
-	log.Printf("Config file: %s", *configPath)
-	log.Printf("Data directory: %s", cfg.Storage.DataDir)
-	log.Printf("Guardrails: max_top_k=%d max_batch_size=%d max_ef_search=%d max_collection_dim=%d max_concurrent_search=%d max_concurrent_write=%d max_data_dir_mb=%d require_rpc_deadline=%t",
-		cfg.Guardrails.MaxTopK, cfg.Guardrails.MaxBatchSize, cfg.Guardrails.MaxEfSearch, cfg.Guardrails.MaxCollectionDim,
-		cfg.Guardrails.MaxConcurrentSearch, cfg.Guardrails.MaxConcurrentWrite, cfg.Guardrails.MaxDataDirMB, cfg.Guardrails.RequireRPCDeadline)
-	log.Printf("Resources: max_workers=%d memory_budget_percent=%d insert_queue_size=%d bulk_load_mode=%t",
-		cfg.Resources.MaxWorkers, cfg.Resources.MemoryBudgetPercent, cfg.Resources.InsertQueueSize, cfg.Resources.BulkLoadMode)
-	log.Printf("gRPC limits: max_recv_mb=%d max_send_mb=%d reflection=%t", cfg.Server.GRPCMaxRecvMB, cfg.Server.GRPCMaxSendMB, cfg.Server.EnableReflection)
+	logStartupInitializationReport(cfg, *configPath, storageOpts, walMode, srv, addr)
+	fmt.Println("databasa ready: accepting requests")
 
 	if err := grpcServer.Serve(lis); err != nil {
-		log.Fatalf("Server error: %v", err)
+		log.Fatalf("server error: %v", err)
+	}
+}
+
+func walSyncModeFromConfig(writeMode string, walSyncMode string) storage.WALSyncMode {
+	mode := strings.ToLower(strings.TrimSpace(writeMode))
+	wal := storage.WALSyncAlways
+	if mode == "performance" {
+		wal = storage.WALSyncPeriodic
+	}
+
+	switch strings.ToLower(strings.TrimSpace(walSyncMode)) {
+	case "always":
+		return storage.WALSyncAlways
+	case "periodic":
+		return storage.WALSyncPeriodic
+	case "none":
+		return storage.WALSyncNone
+	default:
+		return wal
 	}
 }

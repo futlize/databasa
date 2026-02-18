@@ -1,7 +1,7 @@
 param(
-    [string]$Address = "10.0.0.119:50051",
+    [string]$Address = "10.0.0.100:50051",
     [string]$Collection = "benchmark",
-    [int]$Dimension = 128,
+    [int]$Dimension = 1536,
     [int]$BatchSize = 256,
     [int]$Workers = 4,
     [switch]$Embedded

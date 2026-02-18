@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io/fs"
-	"log"
 	"math"
 	"os"
 	"path/filepath"
@@ -31,156 +30,38 @@ import (
 )
 
 const (
-	defaultShardCount          = 8
-	defaultIndexFlushOps       = 4096
-	defaultCompression         = "int8"
-	defaultMaxTopK             = 256
-	defaultMaxBatchSize        = 1000
-	defaultMaxEfSearch         = 4096
-	defaultMaxCollectionDim    = 8192
-	defaultMaxConcurrentSearch = 64
-	defaultMaxConcurrentWrite  = 128
+	defaultShardCount       = 8
+	defaultCompression      = "int8"
+	defaultMaxTopK          = 256
+	defaultMaxBatchSize     = 1000
+	defaultMaxEfSearch      = 4096
+	defaultMaxCollectionDim = 8192
 
-	indexWorkerBatchSize = 256
-	indexWorkerBatchWait = 2 * time.Millisecond
-
-	bulkLoadRebuildIdle = 2 * time.Second
-	bulkLoadRebuildTick = 1 * time.Second
-
-	requestResourceWaitTimeout    = 2 * time.Second
-	backgroundResourceWaitTimeout = 250 * time.Millisecond
-	indexQueuePollInterval        = 5 * time.Millisecond
-	indexQueueWaitTimeout         = 250 * time.Millisecond
-	queueWarnBacklogRatio         = 0.80
-	queueLogInterval              = 2 * time.Second
+	requestResourceWaitTimeout = 2 * time.Second
 )
 
 type GuardrailConfig struct {
-	MaxTopK             uint32
-	MaxBatchSize        int
-	MaxEfSearch         uint32
-	MaxCollectionDim    uint32
-	MaxConcurrentSearch int
-	MaxConcurrentWrite  int
-	MaxDataDirBytes     int64
-	RequireRPCDeadline  bool
+	MaxTopK            uint32
+	MaxBatchSize       int
+	MaxEfSearch        uint32
+	MaxCollectionDim   uint32
+	MaxDataDirBytes    int64
+	RequireRPCDeadline bool
+}
+
+type StartupRecoveryReport struct {
+	RecoveryNeeded      bool
+	WALReplayDuration   time.Duration
+	RecoveredOperations uint64
+	LoadedPartitions    int
+	LoadedShards        int
+	LastCheckpoint      time.Time
 }
 
 type shard struct {
-	// mu guards shard state updates. In the legacy path, writes hold this lock while
-	// also mutating HNSW, which amplifies contention under concurrent inserts.
-	mu            sync.Mutex
-	saveMu        sync.Mutex
-	id            int
-	dir           string
-	store         *storage.VectorStore
-	index         *hnsw.Index
-	dirtyIndexOps int
-	indexQueue    *indexMutationQueue
-	indexDone     chan struct{}
-}
-
-type indexMutation struct {
-	hasOld bool
-	oldID  uint64
-	hasNew bool
-	newID  uint64
-}
-
-// indexMutationQueue is a bounded in-memory queue.
-// Producers block when the queue is full to apply backpressure.
-type indexMutationQueue struct {
-	mu       sync.Mutex
-	notEmpty *sync.Cond
-	items    []indexMutation
-	capacity int
-	closed   bool
-}
-
-func newIndexMutationQueue(capacity int) *indexMutationQueue {
-	if capacity <= 0 {
-		capacity = resources.DefaultConfig().InsertQueueSize
-	}
-	q := &indexMutationQueue{
-		capacity: capacity,
-		items:    make([]indexMutation, 0, capacity),
-	}
-	q.notEmpty = sync.NewCond(&q.mu)
-	return q
-}
-
-func (q *indexMutationQueue) TryEnqueue(item indexMutation) (enqueued bool, closed bool, pending int, capacity int) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	capacity = q.capacity
-	pending = len(q.items)
-	if q.closed {
-		return false, true, pending, capacity
-	}
-	if len(q.items) >= q.capacity {
-		return false, false, pending, capacity
-	}
-	q.items = append(q.items, item)
-	pending = len(q.items)
-	q.notEmpty.Signal()
-	return true, false, pending, capacity
-}
-
-func (q *indexMutationQueue) Len() int {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return len(q.items)
-}
-
-func (q *indexMutationQueue) PopBatch(max int) ([]indexMutation, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	for len(q.items) == 0 && !q.closed {
-		q.notEmpty.Wait()
-	}
-	if len(q.items) == 0 && q.closed {
-		return nil, false
-	}
-
-	n := max
-	if n <= 0 || n > len(q.items) {
-		n = len(q.items)
-	}
-	batch := make([]indexMutation, n)
-	copy(batch, q.items[:n])
-	q.items = q.items[n:]
-	return batch, true
-}
-
-func (q *indexMutationQueue) Drain(max int) []indexMutation {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if len(q.items) == 0 || max <= 0 {
-		return nil
-	}
-	n := max
-	if n > len(q.items) {
-		n = len(q.items)
-	}
-	batch := make([]indexMutation, n)
-	copy(batch, q.items[:n])
-	q.items = q.items[n:]
-	return batch
-}
-
-func (q *indexMutationQueue) Close() {
-	q.mu.Lock()
-	q.closed = true
-	q.mu.Unlock()
-	q.notEmpty.Broadcast()
-}
-
-func (q *indexMutationQueue) IsClosed() bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.closed
+	id    int
+	dir   string
+	store *storage.VectorStore
 }
 
 type collection struct {
@@ -207,18 +88,7 @@ func (c *collection) shardForKey(key string) *shard {
 }
 
 func (c *collection) hasIndex() bool {
-	if len(c.shards) == 0 {
-		return false
-	}
-	for _, sh := range c.shards {
-		sh.mu.Lock()
-		hasIndex := sh.index != nil
-		sh.mu.Unlock()
-		if !hasIndex {
-			return false
-		}
-	}
-	return true
+	return c.indexConfig.M > 0
 }
 
 func (c *collection) count() uint64 {
@@ -236,7 +106,6 @@ type Server struct {
 	dataDir       string
 	collections   map[string]*collection
 	defaultShards int
-	indexFlushOps int
 	compression   string
 
 	maxTopK            uint32
@@ -245,35 +114,26 @@ type Server struct {
 	maxCollectionDim   uint32
 	maxDataDirBytes    int64
 	requireRPCDeadline bool
-	searchLimiter      chan struct{}
-	writeLimiter       chan struct{}
 
 	resourceManager *resources.Manager
-	insertQueueSize int
-	bulkLoadMode    bool
+	storageOptions  storage.Options
+	writeAdmission  string
 
-	bulkMu     sync.Mutex
-	bulkDirty  map[string]time.Time
-	bulkWakeCh chan struct{}
-	bulkStopCh chan struct{}
-	bulkDoneCh chan struct{}
-	closeOnce  sync.Once
+	startupRecovery StartupRecoveryReport
+
+	closeOnce sync.Once
 
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
-
-	lastQueueSaturationLog int64
-	lastQueueBacklogLog    int64
 }
 
 // New creates a server with optimized defaults for large scale.
 func New(dataDir string) (*Server, error) {
-	return NewWithConfig(dataDir, defaultShardCount, defaultIndexFlushOps, defaultCompression)
+	return NewWithConfig(dataDir, defaultShardCount, defaultCompression)
 }
 
 // NewWithConfig creates a server with explicit sharding/persistence/compression knobs.
-func NewWithConfig(dataDir string, defaultShards, indexFlushOps int, compression string) (*Server, error) {
-	rtCfg := currentRuntimeConfig()
+func NewWithConfig(dataDir string, defaultShards int, compression string) (*Server, error) {
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	cleanupOnError := true
 	defer func() {
@@ -288,9 +148,6 @@ func NewWithConfig(dataDir string, defaultShards, indexFlushOps int, compression
 	if defaultShards <= 0 {
 		defaultShards = 1
 	}
-	if indexFlushOps < 0 {
-		indexFlushOps = defaultIndexFlushOps
-	}
 	switch compression {
 	case "none", "int8":
 	default:
@@ -301,25 +158,18 @@ func NewWithConfig(dataDir string, defaultShards, indexFlushOps int, compression
 		dataDir:         dataDir,
 		collections:     make(map[string]*collection),
 		defaultShards:   defaultShards,
-		indexFlushOps:   indexFlushOps,
 		compression:     compression,
 		resourceManager: resources.Global(),
-		insertQueueSize: rtCfg.InsertQueueSize,
-		bulkLoadMode:    rtCfg.BulkLoadMode,
-		bulkDirty:       make(map[string]time.Time),
-		bulkWakeCh:      make(chan struct{}, 1),
-		bulkStopCh:      make(chan struct{}),
-		bulkDoneCh:      make(chan struct{}),
+		storageOptions:  currentStorageOptions(),
+		writeAdmission:  currentRuntimeConfig().WriteAdmissionMode,
 		stopCtx:         stopCtx,
 		stopCancel:      stopCancel,
 	}
 	s.configureGuardrailsLocked(GuardrailConfig{
-		MaxTopK:             defaultMaxTopK,
-		MaxBatchSize:        defaultMaxBatchSize,
-		MaxEfSearch:         defaultMaxEfSearch,
-		MaxCollectionDim:    defaultMaxCollectionDim,
-		MaxConcurrentSearch: defaultMaxConcurrentSearch,
-		MaxConcurrentWrite:  defaultMaxConcurrentWrite,
+		MaxTopK:          defaultMaxTopK,
+		MaxBatchSize:     defaultMaxBatchSize,
+		MaxEfSearch:      defaultMaxEfSearch,
+		MaxCollectionDim: defaultMaxCollectionDim,
 	})
 
 	entries, err := os.ReadDir(dataDir)
@@ -339,12 +189,6 @@ func NewWithConfig(dataDir string, defaultShards, indexFlushOps int, compression
 		if col != nil {
 			s.collections[name] = col
 		}
-	}
-
-	if s.bulkLoadMode {
-		go s.bulkRebuildLoop()
-	} else {
-		close(s.bulkDoneCh)
 	}
 
 	cleanupOnError = false
@@ -370,12 +214,6 @@ func (s *Server) configureGuardrailsLocked(cfg GuardrailConfig) {
 	if cfg.MaxCollectionDim == 0 {
 		cfg.MaxCollectionDim = defaultMaxCollectionDim
 	}
-	if cfg.MaxConcurrentSearch <= 0 {
-		cfg.MaxConcurrentSearch = defaultMaxConcurrentSearch
-	}
-	if cfg.MaxConcurrentWrite <= 0 {
-		cfg.MaxConcurrentWrite = defaultMaxConcurrentWrite
-	}
 	if cfg.MaxDataDirBytes < 0 {
 		cfg.MaxDataDirBytes = 0
 	}
@@ -386,8 +224,6 @@ func (s *Server) configureGuardrailsLocked(cfg GuardrailConfig) {
 	s.maxCollectionDim = cfg.MaxCollectionDim
 	s.maxDataDirBytes = cfg.MaxDataDirBytes
 	s.requireRPCDeadline = cfg.RequireRPCDeadline
-	s.searchLimiter = make(chan struct{}, cfg.MaxConcurrentSearch)
-	s.writeLimiter = make(chan struct{}, cfg.MaxConcurrentWrite)
 }
 
 func (s *Server) validateContext(ctx context.Context) error {
@@ -481,34 +317,10 @@ func (s *Server) acquireWorkerRequest(ctx context.Context, op string, message st
 	}), message)
 }
 
-func (s *Server) acquireWorkerBackground(ctx context.Context, op string) error {
-	return waitWithBoundedContext(ctx, backgroundResourceWaitTimeout, func(waitCtx context.Context) error {
-		return s.resourceManager.AcquireWorker(waitCtx, op)
-	})
-}
-
 func (s *Server) waitInsertAllowanceRequest(ctx context.Context, message string) error {
 	return resourceWaitStatus(waitWithBoundedContext(ctx, requestResourceWaitTimeout, func(waitCtx context.Context) error {
 		return s.resourceManager.WaitInsertAllowance(waitCtx)
 	}), message)
-}
-
-func (s *Server) waitIndexingAllowanceRequest(ctx context.Context, message string) error {
-	return resourceWaitStatus(waitWithBoundedContext(ctx, requestResourceWaitTimeout, func(waitCtx context.Context) error {
-		return s.resourceManager.WaitIndexingAllowance(waitCtx)
-	}), message)
-}
-
-func (s *Server) waitIndexingAllowanceBackground() error {
-	return waitWithBoundedContext(s.stopCtx, backgroundResourceWaitTimeout, func(waitCtx context.Context) error {
-		return s.resourceManager.WaitIndexingAllowance(waitCtx)
-	})
-}
-
-func (s *Server) waitIndexingAllowanceContext(ctx context.Context) error {
-	return waitWithBoundedContext(ctx, requestResourceWaitTimeout, func(waitCtx context.Context) error {
-		return s.resourceManager.WaitIndexingAllowance(waitCtx)
-	})
 }
 
 func (s *Server) waitForMemoryRequest(ctx context.Context, reserveBytes uint64, op string, message string) error {
@@ -524,29 +336,19 @@ func (s *Server) waitForMemoryContext(ctx context.Context, reserveBytes uint64, 
 }
 
 func (s *Server) tryAcquireSearchSlot() error {
-	select {
-	case s.searchLimiter <- struct{}{}:
-		return nil
-	default:
-		return status.Error(codes.ResourceExhausted, "too many concurrent search requests")
-	}
+	return nil
 }
 
 func (s *Server) releaseSearchSlot() {
-	<-s.searchLimiter
+	// no-op: concurrency is intentionally unbounded at server slot level
 }
 
 func (s *Server) tryAcquireWriteSlot() error {
-	select {
-	case s.writeLimiter <- struct{}{}:
-		return nil
-	default:
-		return status.Error(codes.ResourceExhausted, "too many concurrent write requests")
-	}
+	return nil
 }
 
 func (s *Server) releaseWriteSlot() {
-	<-s.writeLimiter
+	// no-op: concurrency is intentionally unbounded at server slot level
 }
 
 func validateEmbeddingValues(embedding []float32) error {
@@ -593,200 +395,52 @@ func (s *Server) loadCollection(name string) (*collection, error) {
 		return nil, err
 	}
 
+	idxCfg := indexConfigFromMeta(meta)
 	col := &collection{
 		name:        meta.Name,
 		dimension:   meta.Dimension,
 		metric:      meta.Metric,
 		compression: meta.Compression,
+		indexConfig: idxCfg,
 		shards:      make([]*shard, 0, meta.ShardCount),
 	}
 	for i := 0; i < int(meta.ShardCount); i++ {
 		shardDir := shardDir(colDir, i)
-		store, err := storage.OpenWithCompression(shardDir, name, meta.Dimension, meta.Metric, meta.Compression)
+		store, err := storage.OpenWithOptions(shardDir, name, meta.Dimension, meta.Metric, meta.Compression, s.storageOptions)
 		if err != nil {
 			return nil, fmt.Errorf("open shard %d: %w", i, err)
 		}
+		s.mergeStartupRecovery(store.StartupRecoveryReport())
+		if idxCfg.M > 0 {
+			store.EnableANN(idxCfg)
+		}
 		sh := &shard{id: i, dir: shardDir, store: store}
-		if err := s.tryLoadShardIndex(sh, meta.Metric); err != nil {
-			_ = store.Close()
-			return nil, err
-		}
-		if sh.index != nil && col.indexConfig.M == 0 {
-			col.indexConfig = sh.index.Config()
-		}
-		s.initShardIndexer(sh)
 		col.shards = append(col.shards, sh)
 	}
 
 	return col, nil
 }
 
-func (s *Server) tryLoadShardIndex(sh *shard, metric string) error {
-	graphPath := filepath.Join(sh.dir, "hnsw.graph")
-	if _, err := os.Stat(graphPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-
-	distFunc := getDistanceFunc(metric)
-	idx, err := hnsw.Load(sh.dir, distFunc, sh.store.GetByID)
-	if err != nil {
-		return fmt.Errorf("load index shard %d: %w", sh.id, err)
-	}
-	idx.SetQueryDistanceFactory(getDistanceQueryFactory(metric))
-
-	// Recovery reconciliation:
-	// storage may have acknowledged WAL-backed writes that were not yet indexed
-	// before a crash. Re-inserting active IDs is idempotent and catches those gaps.
-	for _, id := range sh.store.AllIDs() {
-		_ = idx.Insert(id)
-	}
-
-	sh.index = idx
-	return nil
+// StartupRecoveryReport returns the startup recovery diagnostics aggregated across loaded shards.
+func (s *Server) StartupRecoveryReport() StartupRecoveryReport {
+	return s.startupRecovery
 }
 
-func (s *Server) initShardIndexer(sh *shard) {
-	if sh.indexQueue != nil {
-		return
+func (s *Server) mergeStartupRecovery(rec storage.StartupRecovery) {
+	s.startupRecovery.RecoveryNeeded = s.startupRecovery.RecoveryNeeded || rec.RecoveryNeeded
+	s.startupRecovery.WALReplayDuration += rec.WALReplayDuration
+	s.startupRecovery.RecoveredOperations += uint64(rec.RecoveredOperations)
+	s.startupRecovery.LoadedPartitions += rec.LoadedPartitions
+	s.startupRecovery.LoadedShards++
+	if rec.LastCheckpoint.After(s.startupRecovery.LastCheckpoint) {
+		s.startupRecovery.LastCheckpoint = rec.LastCheckpoint
 	}
-	sh.indexQueue = newIndexMutationQueue(s.insertQueueSize)
-	sh.indexDone = make(chan struct{})
-	go s.runShardIndexer(sh)
-}
-
-func (s *Server) stopShardIndexer(sh *shard) {
-	if sh.indexQueue == nil {
-		return
-	}
-	sh.indexQueue.Close()
-	<-sh.indexDone
-	sh.indexQueue = nil
-	sh.indexDone = nil
-}
-
-func (s *Server) enqueueIndexMutations(ctx context.Context, sh *shard, muts []indexMutation) error {
-	if len(muts) == 0 {
-		return nil
-	}
-
-	sh.mu.Lock()
-	idx := sh.index
-	q := sh.indexQueue
-	sh.mu.Unlock()
-	if idx == nil || q == nil {
-		return nil
-	}
-
-	for _, mut := range muts {
-		if err := s.waitIndexingAllowanceRequest(ctx, "indexing throttled"); err != nil {
-			return err
-		}
-
-		enqueueCtx, cancel := contextWithBoundedTimeout(ctx, indexQueueWaitTimeout)
-		enqueued := false
-		for !enqueued {
-			ok, closed, pending, capacity := q.TryEnqueue(mut)
-			if ok {
-				enqueued = true
-				if capacity > 0 && float64(pending) >= float64(capacity)*queueWarnBacklogRatio && shouldLogAtMost(&s.lastQueueBacklogLog, queueLogInterval) {
-					log.Printf("WARN indexing: queue backlog high shard=%d pending=%d capacity=%d", sh.id, pending, capacity)
-				}
-				break
-			}
-			if closed {
-				cancel()
-				return status.Error(codes.ResourceExhausted, "index queue is closed")
-			}
-			if shouldLogAtMost(&s.lastQueueSaturationLog, queueLogInterval) {
-				log.Printf("WARN indexing: queue saturated shard=%d pending=%d capacity=%d", sh.id, pending, capacity)
-			}
-			if err := waitForContext(enqueueCtx, indexQueuePollInterval); err != nil {
-				cancel()
-				if errors.Is(err, context.DeadlineExceeded) {
-					return status.Error(codes.ResourceExhausted, "index queue saturated")
-				}
-				return status.FromContextError(err).Err()
-			}
-		}
-		cancel()
-	}
-	return nil
-}
-
-func (s *Server) runShardIndexer(sh *shard) {
-	defer close(sh.indexDone)
-	for {
-		batch, ok := sh.indexQueue.PopBatch(indexWorkerBatchSize)
-		if !ok {
-			return
-		}
-
-		// Short coalescing window to turn many tiny writes into fewer index updates.
-		time.Sleep(indexWorkerBatchWait)
-		if len(batch) < indexWorkerBatchSize {
-			extra := sh.indexQueue.Drain(indexWorkerBatchSize - len(batch))
-			if len(extra) > 0 {
-				batch = append(batch, extra...)
-			}
-		}
-
-		for {
-			err := s.waitIndexingAllowanceBackground()
-			if err == nil {
-				break
-			}
-			if errors.Is(err, context.Canceled) {
-				return
-			}
-		}
-
-		s.applyIndexMutations(sh, batch)
-	}
-}
-
-func (s *Server) applyIndexMutations(sh *shard, batch []indexMutation) {
-	if len(batch) == 0 {
-		return
-	}
-
-	sh.mu.Lock()
-	idx := sh.index
-	sh.mu.Unlock()
-	if idx == nil {
-		return
-	}
-
-	appliedOps := 0
-	for _, mut := range batch {
-		if mut.hasOld {
-			idx.Remove(mut.oldID)
-			appliedOps++
-		}
-		if mut.hasNew {
-			if err := idx.Insert(mut.newID); err == nil {
-				appliedOps++
-			}
-		}
-	}
-	if appliedOps == 0 {
-		return
-	}
-
-	sh.mu.Lock()
-	sh.dirtyIndexOps += appliedOps
-	_ = s.persistShardIndexLocked(sh, false)
-	sh.mu.Unlock()
 }
 
 // Close closes all collections.
 func (s *Server) Close() {
 	s.closeOnce.Do(func() {
 		s.stopCancel()
-		close(s.bulkStopCh)
-		<-s.bulkDoneCh
 
 		s.mu.Lock()
 		shards := make([]*shard, 0)
@@ -796,108 +450,9 @@ func (s *Server) Close() {
 		s.mu.Unlock()
 
 		for _, sh := range shards {
-			s.stopShardIndexer(sh)
-			sh.mu.Lock()
-			_ = s.persistShardIndexLocked(sh, true)
-			sh.mu.Unlock()
 			_ = sh.store.Close()
 		}
 	})
-}
-
-func (s *Server) markCollectionIndexDirty(name string) {
-	if !s.bulkLoadMode {
-		return
-	}
-	s.bulkMu.Lock()
-	s.bulkDirty[name] = time.Now()
-	s.bulkMu.Unlock()
-	select {
-	case s.bulkWakeCh <- struct{}{}:
-	default:
-	}
-}
-
-func (s *Server) bulkRebuildLoop() {
-	defer close(s.bulkDoneCh)
-
-	ticker := time.NewTicker(bulkLoadRebuildTick)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-s.bulkStopCh:
-			return
-		case <-ticker.C:
-		case <-s.bulkWakeCh:
-		}
-
-		now := time.Now()
-		type rebuildJob struct {
-			collection string
-			lastWrite  time.Time
-		}
-		jobs := make([]rebuildJob, 0)
-
-		s.bulkMu.Lock()
-		for name, ts := range s.bulkDirty {
-			if now.Sub(ts) >= bulkLoadRebuildIdle {
-				jobs = append(jobs, rebuildJob{collection: name, lastWrite: ts})
-			}
-		}
-		s.bulkMu.Unlock()
-
-		for _, job := range jobs {
-			if err := s.rebuildCollectionIndex(job.collection); err != nil {
-				log.Printf("WARN bulk-load: rebuild failed collection=%s err=%v", job.collection, err)
-				continue
-			}
-
-			s.bulkMu.Lock()
-			current, exists := s.bulkDirty[job.collection]
-			if exists && !current.After(job.lastWrite) {
-				delete(s.bulkDirty, job.collection)
-			}
-			s.bulkMu.Unlock()
-		}
-	}
-}
-
-func (s *Server) rebuildCollectionIndex(collectionName string) error {
-	if err := s.acquireWorkerBackground(s.stopCtx, "bulk_rebuild_index"); err != nil {
-		return err
-	}
-	defer s.resourceManager.ReleaseWorker()
-
-	s.mu.RLock()
-	col, exists := s.collections[collectionName]
-	if !exists {
-		s.mu.RUnlock()
-		return nil
-	}
-	if !col.hasIndex() {
-		s.mu.RUnlock()
-		return nil
-	}
-
-	cfg := col.indexConfig
-	metric := col.metric
-	shards := append([]*shard(nil), col.shards...)
-	s.mu.RUnlock()
-
-	if cfg.M == 0 {
-		cfg = hnsw.DefaultConfig()
-	}
-	if err := s.buildCollectionIndex(s.stopCtx, metric, shards, cfg); err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	if current, ok := s.collections[collectionName]; ok && current == col {
-		current.indexConfig = cfg
-	}
-	s.mu.Unlock()
-	return nil
 }
 
 // CreateCollection creates a sharded collection.
@@ -937,6 +492,9 @@ func (s *Server) CreateCollection(ctx context.Context, req *pb.CreateCollectionR
 		Metric:      metric,
 		Compression: s.compression,
 		ShardCount:  uint32(s.defaultShards),
+		IndexM:      0,
+		IndexEfC:    0,
+		IndexEfS:    0,
 	}
 	if err := saveCollectionMeta(colDir, meta); err != nil {
 		return nil, status.Errorf(codes.Internal, "save collection meta: %v", err)
@@ -952,10 +510,9 @@ func (s *Server) CreateCollection(ctx context.Context, req *pb.CreateCollectionR
 
 	for i := 0; i < s.defaultShards; i++ {
 		shardDir := shardDir(colDir, i)
-		store, err := storage.OpenWithCompression(shardDir, req.Name, req.Dimension, metric, s.compression)
+		store, err := storage.OpenWithOptions(shardDir, req.Name, req.Dimension, metric, s.compression, s.storageOptions)
 		if err != nil {
 			for _, existing := range col.shards {
-				s.stopShardIndexer(existing)
 				_ = existing.store.Close()
 			}
 			_ = os.RemoveAll(colDir)
@@ -966,7 +523,6 @@ func (s *Server) CreateCollection(ctx context.Context, req *pb.CreateCollectionR
 			dir:   shardDir,
 			store: store,
 		}
-		s.initShardIndexer(sh)
 		col.shards = append(col.shards, sh)
 	}
 
@@ -987,17 +543,10 @@ func (s *Server) DeleteCollection(ctx context.Context, req *pb.DeleteCollectionR
 	}
 
 	for _, sh := range col.shards {
-		s.stopShardIndexer(sh)
-		sh.mu.Lock()
-		_ = s.persistShardIndexLocked(sh, true)
-		sh.mu.Unlock()
 		_ = sh.store.Close()
 	}
 
 	delete(s.collections, req.Name)
-	s.bulkMu.Lock()
-	delete(s.bulkDirty, req.Name)
-	s.bulkMu.Unlock()
 	if err := os.RemoveAll(filepath.Join(s.dataDir, req.Name)); err != nil {
 		return nil, status.Errorf(codes.Internal, "remove collection data: %v", err)
 	}
@@ -1029,68 +578,12 @@ func (s *Server) ListCollections(ctx context.Context, req *pb.ListCollectionsReq
 	return &pb.ListCollectionsResponse{Collections: infos}, nil
 }
 
-func (s *Server) buildCollectionIndex(ctx context.Context, metric string, shards []*shard, cfg hnsw.Config) error {
-	distFunc := getDistanceFunc(metric)
-	queryFactory := getDistanceQueryFactory(metric)
-
-	for _, sh := range shards {
-		if err := s.waitIndexingAllowanceContext(ctx); err != nil {
-			return err
-		}
-
-		ids := sh.store.AllIDs()
-		if err := s.waitForMemoryContext(ctx, uint64(len(ids))*8, "index_build_snapshot"); err != nil {
-			return err
-		}
-
-		idx := hnsw.New(cfg, distFunc, sh.store.GetByID)
-		idx.SetQueryDistanceFactory(queryFactory)
-		for _, id := range ids {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			if err := idx.Insert(id); err != nil {
-				return fmt.Errorf("index shard %d vector %d: %w", sh.id, id, err)
-			}
-		}
-
-		if err := s.enforceDataDirLimit(); err != nil {
-			return err
-		}
-
-		sh.mu.Lock()
-		sh.index = idx
-		sh.dirtyIndexOps = 0
-		if err := s.persistShardIndexLocked(sh, true); err != nil {
-			sh.mu.Unlock()
-			return fmt.Errorf("save index shard %d: %w", sh.id, err)
-		}
-		sh.mu.Unlock()
-	}
-	return nil
-}
-
 func (s *Server) CreateIndex(ctx context.Context, req *pb.CreateIndexRequest) (*pb.CreateIndexResponse, error) {
 	if err := s.validateContext(ctx); err != nil {
 		return nil, err
 	}
 	if err := s.enforceDataDirLimit(); err != nil {
 		return nil, err
-	}
-	if err := s.acquireWorkerRequest(ctx, "create_index", "create_index workers saturated"); err != nil {
-		return nil, err
-	}
-	defer s.resourceManager.ReleaseWorker()
-
-	s.mu.RLock()
-	col, exists := s.collections[req.Collection]
-	if !exists {
-		s.mu.RUnlock()
-		return nil, status.Errorf(codes.NotFound, "collection %q not found", req.Collection)
-	}
-	if col.hasIndex() {
-		s.mu.RUnlock()
-		return nil, status.Errorf(codes.AlreadyExists, "index already exists for %q", req.Collection)
 	}
 
 	cfg := hnsw.DefaultConfig()
@@ -1101,29 +594,46 @@ func (s *Server) CreateIndex(ctx context.Context, req *pb.CreateIndexRequest) (*
 	if req.EfConstruction > 0 {
 		cfg.EfConstruction = int(req.EfConstruction)
 	}
-	metric := col.metric
-	shards := append([]*shard(nil), col.shards...)
-	s.mu.RUnlock()
 
-	if err := s.buildCollectionIndex(ctx, metric, shards, cfg); err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			if errors.Is(err, context.DeadlineExceeded) {
-				return nil, status.Error(codes.ResourceExhausted, "index build timed out")
+	s.mu.RLock()
+	col, exists := s.collections[req.Collection]
+	if !exists {
+		s.mu.RUnlock()
+		return nil, status.Errorf(codes.NotFound, "collection %q not found", req.Collection)
+	}
+	shards := append([]*shard(nil), col.shards...)
+	previousCfg := col.indexConfig
+	colDir := filepath.Join(s.dataDir, col.name)
+	meta := collectionMeta{
+		Name:        col.name,
+		Dimension:   col.dimension,
+		Metric:      col.metric,
+		Compression: col.compression,
+		ShardCount:  uint32(len(col.shards)),
+		IndexM:      uint32(cfg.M),
+		IndexEfC:    uint32(cfg.EfConstruction),
+		IndexEfS:    uint32(cfg.EfSearch),
+	}
+	s.mu.RUnlock()
+	for _, sh := range shards {
+		sh.store.EnableANN(cfg)
+	}
+	if err := saveCollectionMeta(colDir, meta); err != nil {
+		for _, sh := range shards {
+			if previousCfg.M > 0 {
+				sh.store.EnableANN(previousCfg)
+			} else {
+				sh.store.DisableANN()
 			}
-			return nil, status.FromContextError(err).Err()
 		}
-		if st, ok := status.FromError(err); ok {
-			return nil, st.Err()
-		}
-		return nil, status.Errorf(codes.Internal, "create index for %q: %v", req.Collection, err)
+		return nil, status.Errorf(codes.Internal, "persist collection index config: %v", err)
 	}
 
 	s.mu.Lock()
-	if current, ok := s.collections[req.Collection]; ok && current == col {
+	if current, ok := s.collections[req.Collection]; ok {
 		current.indexConfig = cfg
 	}
 	s.mu.Unlock()
-
 	return &pb.CreateIndexResponse{}, nil
 }
 
@@ -1131,25 +641,49 @@ func (s *Server) DropIndex(ctx context.Context, req *pb.DropIndexRequest) (*pb.D
 	if err := s.validateContext(ctx); err != nil {
 		return nil, err
 	}
+	s.mu.RLock()
+	col, exists := s.collections[req.Collection]
+	if !exists {
+		s.mu.RUnlock()
+		return nil, status.Errorf(codes.NotFound, "collection %q not found", req.Collection)
+	}
+	shards := append([]*shard(nil), col.shards...)
+	previousCfg := col.indexConfig
+	colDir := filepath.Join(s.dataDir, col.name)
+	meta := collectionMeta{
+		Name:        col.name,
+		Dimension:   col.dimension,
+		Metric:      col.metric,
+		Compression: col.compression,
+		ShardCount:  uint32(len(col.shards)),
+		IndexM:      0,
+		IndexEfC:    0,
+		IndexEfS:    0,
+	}
+	s.mu.RUnlock()
+
+	for _, sh := range shards {
+		sh.store.DisableANN()
+	}
+	if err := saveCollectionMeta(colDir, meta); err != nil {
+		for _, sh := range shards {
+			if previousCfg.M > 0 {
+				sh.store.EnableANN(previousCfg)
+			}
+		}
+		return nil, status.Errorf(codes.Internal, "persist collection index config: %v", err)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	col, exists := s.collections[req.Collection]
+	col, exists = s.collections[req.Collection]
 	if !exists {
 		return nil, status.Errorf(codes.NotFound, "collection %q not found", req.Collection)
 	}
-
 	for _, sh := range col.shards {
-		sh.mu.Lock()
-		sh.index = nil
-		sh.dirtyIndexOps = 0
-		sh.mu.Unlock()
-		_ = os.Remove(filepath.Join(sh.dir, "hnsw.graph"))
+		sh.store.DisableANN()
 	}
 	col.indexConfig = hnsw.Config{}
-	s.bulkMu.Lock()
-	delete(s.bulkDirty, req.Collection)
-	s.bulkMu.Unlock()
 
 	return &pb.DropIndexResponse{}, nil
 }
@@ -1182,11 +716,13 @@ func (s *Server) Insert(ctx context.Context, req *pb.InsertRequest) (*pb.InsertR
 	if err := validateEmbeddingValues(req.Embedding); err != nil {
 		return nil, err
 	}
-	if err := s.waitInsertAllowanceRequest(ctx, "insert throttled"); err != nil {
-		return nil, err
-	}
-	if err := s.waitForMemoryRequest(ctx, uint64(len(req.Embedding))*8, "insert", "insert memory budget exceeded"); err != nil {
-		return nil, err
+	if s.writeAdmission == "strict" {
+		if err := s.waitInsertAllowanceRequest(ctx, "insert throttled"); err != nil {
+			return nil, err
+		}
+		if err := s.waitForMemoryRequest(ctx, uint64(len(req.Embedding))*8, "insert", "insert memory budget exceeded"); err != nil {
+			return nil, err
+		}
 	}
 
 	sh := col.shardForKey(req.Key)
@@ -1194,34 +730,12 @@ func (s *Server) Insert(ctx context.Context, req *pb.InsertRequest) (*pb.InsertR
 		return nil, status.Errorf(codes.Internal, "no shard available")
 	}
 
-	oldID, hadOld := sh.store.GetID(req.Key)
-	if err := s.acquireWorkerRequest(ctx, "insert", "insert workers saturated"); err != nil {
-		return nil, err
-	}
 	storeCtx, storeCancel := contextWithBoundedTimeout(ctx, requestResourceWaitTimeout)
-	id, err := sh.store.Insert(storeCtx, req.Key, req.Embedding)
+	_, err := sh.store.Insert(storeCtx, req.Key, req.Embedding)
 	storeCancel()
-	s.resourceManager.ReleaseWorker()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "insert: %v", err)
 	}
-
-	if s.bulkLoadMode && col.hasIndex() {
-		s.markCollectionIndexDirty(req.Collection)
-	} else {
-		// New write path:
-		// index maintenance is queued and applied by a background worker in batches.
-		// Insert acknowledgement no longer waits for HNSW mutation or index fsync.
-		if err := s.enqueueIndexMutations(ctx, sh, []indexMutation{{
-			hasOld: hadOld,
-			oldID:  oldID,
-			hasNew: true,
-			newID:  id,
-		}}); err != nil {
-			return nil, err
-		}
-	}
-
 	return &pb.InsertResponse{}, nil
 }
 
@@ -1281,27 +795,12 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*pb.DeleteR
 		return nil, status.Errorf(codes.Internal, "no shard available")
 	}
 
-	id, hadID := sh.store.GetID(req.Key)
-	if err := s.acquireWorkerRequest(ctx, "delete", "delete workers saturated"); err != nil {
-		return nil, err
-	}
-	err := sh.store.Delete(req.Key)
-	s.resourceManager.ReleaseWorker()
+	storeCtx, storeCancel := contextWithBoundedTimeout(ctx, requestResourceWaitTimeout)
+	err := sh.store.DeleteWithContext(storeCtx, req.Key)
+	storeCancel()
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "%v", err)
 	}
-
-	if hadID && !(s.bulkLoadMode && col.hasIndex()) {
-		if err := s.enqueueIndexMutations(ctx, sh, []indexMutation{{
-			hasOld: true,
-			oldID:  id,
-		}}); err != nil {
-			return nil, err
-		}
-	} else if hadID && s.bulkLoadMode && col.hasIndex() {
-		s.markCollectionIndexDirty(req.Collection)
-	}
-
 	return &pb.DeleteResponse{}, nil
 }
 
@@ -1330,8 +829,10 @@ func (s *Server) BatchInsert(ctx context.Context, req *pb.BatchInsertRequest) (*
 	if len(req.Items) > s.maxBatchSize {
 		return nil, status.Errorf(codes.InvalidArgument, "batch size exceeds max_batch_size=%d", s.maxBatchSize)
 	}
-	if err := s.waitInsertAllowanceRequest(ctx, "batch insert throttled"); err != nil {
-		return nil, err
+	if s.writeAdmission == "strict" {
+		if err := s.waitInsertAllowanceRequest(ctx, "batch insert throttled"); err != nil {
+			return nil, err
+		}
 	}
 
 	grouped := make(map[*shard][]storage.BatchInsertItem, len(col.shards))
@@ -1352,7 +853,9 @@ func (s *Server) BatchInsert(ctx context.Context, req *pb.BatchInsertRequest) (*
 		if err := s.enforceDataDirLimit(); err != nil {
 			return nil, err
 		}
-		reserveBytes += uint64(len(item.Embedding)) * 8
+		if s.writeAdmission == "strict" {
+			reserveBytes += uint64(len(item.Embedding)) * 8
+		}
 
 		sh := col.shardForKey(item.Key)
 		if sh == nil {
@@ -1363,8 +866,10 @@ func (s *Server) BatchInsert(ctx context.Context, req *pb.BatchInsertRequest) (*
 			Embedding: item.Embedding,
 		})
 	}
-	if err := s.waitForMemoryRequest(ctx, reserveBytes, "batch_insert", "batch insert memory budget exceeded"); err != nil {
-		return nil, err
+	if s.writeAdmission == "strict" {
+		if err := s.waitForMemoryRequest(ctx, reserveBytes, "batch_insert", "batch insert memory budget exceeded"); err != nil {
+			return nil, err
+		}
 	}
 
 	var inserted uint64
@@ -1373,34 +878,13 @@ func (s *Server) BatchInsert(ctx context.Context, req *pb.BatchInsertRequest) (*
 			return nil, status.FromContextError(err).Err()
 		}
 
-		if err := s.acquireWorkerRequest(ctx, "batch_insert", "batch insert workers saturated"); err != nil {
-			return nil, err
-		}
 		storeCtx, storeCancel := contextWithBoundedTimeout(ctx, requestResourceWaitTimeout)
 		results, err := sh.store.BatchInsert(storeCtx, shardItems)
 		storeCancel()
-		s.resourceManager.ReleaseWorker()
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "batch insert shard %d: %v", sh.id, err)
 		}
 		inserted += uint64(len(results))
-
-		if len(results) > 0 && !(s.bulkLoadMode && col.hasIndex()) {
-			muts := make([]indexMutation, 0, len(results))
-			for _, result := range results {
-				muts = append(muts, indexMutation{
-					hasOld: result.HadOld,
-					oldID:  result.OldID,
-					hasNew: true,
-					newID:  result.ID,
-				})
-			}
-			if err := s.enqueueIndexMutations(ctx, sh, muts); err != nil {
-				return nil, err
-			}
-		} else if len(results) > 0 && s.bulkLoadMode && col.hasIndex() {
-			s.markCollectionIndexDirty(req.Collection)
-		}
 	}
 
 	return &pb.BatchInsertResponse{Inserted: inserted}, nil
@@ -1441,15 +925,7 @@ func (s *Server) Search(ctx context.Context, req *pb.SearchRequest) (*pb.SearchR
 	queryEmbedding := normalizeQueryForMetric(col.metric, req.Embedding)
 
 	topK := int(req.TopK)
-	var (
-		results []scoredResult
-		err     error
-	)
-	if col.hasIndex() {
-		results, err = s.searchIndexedDistributed(ctx, col, queryEmbedding, topK, int(req.EfSearch))
-	} else {
-		results, err = s.searchBruteForceDistributed(ctx, col, queryEmbedding, topK)
-	}
+	results, err := s.searchDistributed(ctx, col, queryEmbedding, topK, int(req.EfSearch))
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, status.FromContextError(err).Err()
@@ -1564,12 +1040,7 @@ type shardSearchOutput struct {
 	err   error
 }
 
-func (s *Server) searchIndexedDistributed(ctx context.Context, col *collection, query []float32, topK int, efSearch int) ([]scoredResult, error) {
-	candidateK := topK * 2
-	if candidateK < 32 {
-		candidateK = 32
-	}
-
+func (s *Server) searchDistributed(ctx context.Context, col *collection, query []float32, topK int, efSearch int) ([]scoredResult, error) {
 	out := make(chan shardSearchOutput, len(col.shards))
 	for _, shardRef := range col.shards {
 		sh := shardRef
@@ -1580,81 +1051,17 @@ func (s *Server) searchIndexedDistributed(ctx context.Context, col *collection, 
 			}
 			defer s.resourceManager.ReleaseWorker()
 
-			if err := ctx.Err(); err != nil {
-				out <- shardSearchOutput{err: err}
-				return
-			}
-			sh.mu.Lock()
-			idx := sh.index
-			sh.mu.Unlock()
-			if idx == nil {
-				items, err := s.searchShardBruteForce(ctx, sh, query, topK)
-				out <- shardSearchOutput{items: items, err: err}
-				return
-			}
-
-			indexResults, err := idx.Search(query, candidateK, efSearch)
+			hits, err := sh.store.SearchTopK(ctx, query, topK, efSearch)
 			if err != nil {
 				out <- shardSearchOutput{err: err}
 				return
 			}
-
-			ids := make([]uint64, 0, len(indexResults))
-			for _, r := range indexResults {
-				ids = append(ids, r.ID)
-			}
-			resolved := sh.store.ResolveActiveKeys(ids)
-
-			items := make([]scoredResult, 0, len(resolved))
-			for _, r := range indexResults {
-				if err := ctx.Err(); err != nil {
-					out <- shardSearchOutput{err: err}
-					return
-				}
-				key, ok := resolved[r.ID]
-				if !ok {
-					continue
-				}
-				items = append(items, scoredResult{key: key, dist: r.Distance})
-			}
-
-			// Indexing is asynchronous, so recent writes may not be visible in HNSW yet.
-			// Fallback keeps search complete by reading shard state directly when needed.
-			if len(items) < topK {
-				bruteItems, err := s.searchShardBruteForce(ctx, sh, query, topK)
-				if err != nil {
-					out <- shardSearchOutput{err: err}
-					return
-				}
-				if len(bruteItems) > 0 {
-					byKey := make(map[string]float32, len(items)+len(bruteItems))
-					for _, item := range items {
-						byKey[item.key] = item.dist
-					}
-					for _, item := range bruteItems {
-						if existing, ok := byKey[item.key]; ok {
-							if item.dist < existing {
-								byKey[item.key] = item.dist
-							}
-							continue
-						}
-						byKey[item.key] = item.dist
-					}
-					merged := make([]scoredResult, 0, len(byKey))
-					for key, dist := range byKey {
-						merged = append(merged, scoredResult{key: key, dist: dist})
-					}
-					sort.Slice(merged, func(i, j int) bool {
-						if merged[i].dist == merged[j].dist {
-							return merged[i].key < merged[j].key
-						}
-						return merged[i].dist < merged[j].dist
-					})
-					if len(merged) > topK {
-						merged = merged[:topK]
-					}
-					items = merged
-				}
+			items := make([]scoredResult, 0, len(hits))
+			for _, hit := range hits {
+				items = append(items, scoredResult{
+					key:  hit.Key,
+					dist: hit.Distance,
+				})
 			}
 			out <- shardSearchOutput{items: items}
 		}()
@@ -1662,7 +1069,6 @@ func (s *Server) searchIndexedDistributed(ctx context.Context, col *collection, 
 
 	merged := &scoredMaxHeap{}
 	heap.Init(merged)
-
 	for i := 0; i < len(col.shards); i++ {
 		select {
 		case <-ctx.Done():
@@ -1677,104 +1083,6 @@ func (s *Server) searchIndexedDistributed(ctx context.Context, col *collection, 
 		}
 	}
 	return heapToAscending(merged), nil
-}
-
-func (s *Server) searchBruteForceDistributed(ctx context.Context, col *collection, query []float32, topK int) ([]scoredResult, error) {
-	out := make(chan shardSearchOutput, len(col.shards))
-	for _, shardRef := range col.shards {
-		sh := shardRef
-		go func() {
-			if err := s.acquireWorkerRequest(ctx, "search_bruteforce_shard", "search workers saturated"); err != nil {
-				out <- shardSearchOutput{err: err}
-				return
-			}
-			defer s.resourceManager.ReleaseWorker()
-
-			items, err := s.searchShardBruteForce(ctx, sh, query, topK)
-			out <- shardSearchOutput{items: items, err: err}
-		}()
-	}
-
-	merged := &scoredMaxHeap{}
-	heap.Init(merged)
-
-	for i := 0; i < len(col.shards); i++ {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case res := <-out:
-			if res.err != nil {
-				return nil, res.err
-			}
-			for _, item := range res.items {
-				pushTopK(merged, item, topK)
-			}
-		}
-	}
-	return heapToAscending(merged), nil
-}
-
-func (s *Server) searchShardBruteForce(ctx context.Context, sh *shard, query []float32, topK int) ([]scoredResult, error) {
-	reserveBytes := sh.store.Count() * uint64(sh.store.Dimension()) * 4
-	if err := s.waitForMemoryContext(ctx, reserveBytes, "search_snapshot"); err != nil {
-		return nil, err
-	}
-
-	storeCtx, storeCancel := contextWithBoundedTimeout(ctx, requestResourceWaitTimeout)
-	hits, err := sh.store.SearchBruteForceTopK(storeCtx, query, topK)
-	storeCancel()
-	if err != nil {
-		return nil, err
-	}
-
-	items := make([]scoredResult, 0, len(hits))
-	for _, hit := range hits {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		items = append(items, scoredResult{
-			key:  hit.Key,
-			dist: hit.Distance,
-		})
-	}
-	return items, nil
-}
-
-func (s *Server) persistShardIndexLocked(sh *shard, force bool) error {
-	if sh.index == nil {
-		return nil
-	}
-	if !force {
-		if s.indexFlushOps == 0 {
-			return nil
-		}
-		if sh.dirtyIndexOps < s.indexFlushOps {
-			return nil
-		}
-	}
-
-	// Save can be expensive; release shard lock while persisting.
-	idx := sh.index
-	dir := sh.dir
-	sh.dirtyIndexOps = 0
-
-	sh.mu.Unlock()
-	sh.saveMu.Lock()
-	// Legacy write amplification:
-	// idx.Save snapshots and rewrites the full graph file, then calls f.Sync().
-	// In the old design this ran in the foreground insert path; now it is invoked
-	// by the background indexer, so inserts no longer wait on this disk-heavy step.
-	err := idx.Save(dir)
-	sh.saveMu.Unlock()
-	sh.mu.Lock()
-
-	if err != nil {
-		if !force && s.indexFlushOps > 0 && sh.dirtyIndexOps < s.indexFlushOps {
-			sh.dirtyIndexOps = s.indexFlushOps
-		}
-		return err
-	}
-	return nil
 }
 
 type scoredMaxHeap []scoredResult
@@ -1869,6 +1177,22 @@ func getDistanceQueryFactory(metric string) hnsw.QueryDistanceFactory {
 	default:
 		return hnsw.PrepareCosineDistance
 	}
+}
+
+func indexConfigFromMeta(meta collectionMeta) hnsw.Config {
+	if meta.IndexM == 0 {
+		return hnsw.Config{}
+	}
+	cfg := hnsw.DefaultConfig()
+	cfg.M = int(meta.IndexM)
+	cfg.MMax0 = cfg.M * 2
+	if meta.IndexEfC > 0 {
+		cfg.EfConstruction = int(meta.IndexEfC)
+	}
+	if meta.IndexEfS > 0 {
+		cfg.EfSearch = int(meta.IndexEfS)
+	}
+	return cfg
 }
 
 func metricToString(m pb.Metric) string {

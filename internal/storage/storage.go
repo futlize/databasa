@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"container/heap"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -14,32 +15,168 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/futlize/databasa/internal/hnsw"
 	"github.com/futlize/databasa/internal/resources"
 )
 
 const (
-	metaFileName      = "meta.bin"
-	walActiveFileName = "wal-active.log"
-	segmentDirName    = "segments"
+	metaFileName = "meta.bin"
 
-	metaVersion    uint16 = 3
-	walVersion     uint16 = 1
-	segmentVersion uint16 = 1
+	walDirName       = "wal"
+	walActiveName    = "wal-active.log"
+	partitionsDir    = "partitions"
+	indexDirName     = "indexes"
+	partitionFileExt = ".part"
+
+	metaVersion      uint16 = 4
+	walVersion       uint16 = 1
+	partitionVersion uint16 = 1
 
 	opUpsert byte = 1
 	opDelete byte = 2
 
-	defaultMemtableFlushOps   = 2048
-	defaultCompactionSegments = 4
+	defaultActivePartitionStripes  = 128
+	defaultActivePartitionMaxOps   = 20_000
+	defaultActivePartitionMaxBytes = 64 << 20
+	defaultPartitionMaxCount       = 12
+	defaultPartitionMergeFanIn     = 4
+	defaultPartitionIndexMinRows   = 512
+
+	defaultSealCheckInterval  = 250 * time.Millisecond
+	defaultMergeCheckInterval = 2 * time.Second
+	defaultIndexRescanEvery   = 1 * time.Second
+
+	defaultIndexWorkers      = 2
+	defaultMergeWorkers      = 1
+	defaultOptimizerQueueCap = 256
+
+	defaultWALQueueSize    = 8192
+	defaultWALBatchMaxOps  = 1024
+	defaultWALBatchWait    = 1 * time.Millisecond
+	defaultWALSyncInterval = 10 * time.Millisecond
 )
 
 var (
-	metaMagic    = [8]byte{'K', 'D', 'B', 'M', 'E', 'T', 'A', '3'}
-	walMagic     = [8]byte{'K', 'D', 'B', 'W', 'A', 'L', '0', '1'}
-	segmentMagic = [8]byte{'K', 'D', 'B', 'S', 'E', 'G', '0', '1'}
+	metaMagic      = [8]byte{'K', 'D', 'B', 'M', 'E', 'T', 'A', '4'}
+	walMagic       = [8]byte{'K', 'D', 'B', 'W', 'A', 'L', '0', '1'}
+	partitionMagic = [8]byte{'K', 'D', 'B', 'P', 'A', 'R', '0', '1'}
 )
+
+type WALSyncMode string
+
+const (
+	WALSyncAlways   WALSyncMode = "always"
+	WALSyncPeriodic WALSyncMode = "periodic"
+	WALSyncNone     WALSyncMode = "none"
+)
+
+// Options controls write-path durability/throughput tradeoffs and optimizer behavior.
+type Options struct {
+	ActivePartitionStripes  int
+	ActivePartitionMaxOps   int
+	ActivePartitionMaxBytes uint64
+
+	PartitionMaxCount     int
+	PartitionMergeFanIn   int
+	PartitionIndexMinRows int
+
+	SealCheckInterval  time.Duration
+	MergeCheckInterval time.Duration
+	IndexRescanEvery   time.Duration
+
+	IndexWorkers      int
+	MergeWorkers      int
+	OptimizerQueueCap int
+
+	WALSyncMode     WALSyncMode
+	WALQueueSize    int
+	WALBatchMaxOps  int
+	WALBatchWait    time.Duration
+	WALSyncInterval time.Duration
+
+	ANNEnabled bool
+	HNSWConfig hnsw.Config
+}
+
+// StartupRecovery holds durability/recovery diagnostics captured during OpenWithOptions.
+type StartupRecovery struct {
+	RecoveryNeeded      bool
+	WALReplayDuration   time.Duration
+	RecoveredOperations int
+	LoadedPartitions    int
+	LastCheckpoint      time.Time
+}
+
+func DefaultOptions() Options {
+	return normalizeOptions(Options{
+		ANNEnabled: false,
+		HNSWConfig: hnsw.DefaultConfig(),
+	})
+}
+
+func normalizeOptions(in Options) Options {
+	out := in
+	if out.ActivePartitionStripes <= 0 {
+		out.ActivePartitionStripes = defaultActivePartitionStripes
+	}
+	if out.ActivePartitionMaxOps <= 0 {
+		out.ActivePartitionMaxOps = defaultActivePartitionMaxOps
+	}
+	if out.ActivePartitionMaxBytes == 0 {
+		out.ActivePartitionMaxBytes = defaultActivePartitionMaxBytes
+	}
+	if out.PartitionMaxCount <= 0 {
+		out.PartitionMaxCount = defaultPartitionMaxCount
+	}
+	if out.PartitionMergeFanIn <= 1 {
+		out.PartitionMergeFanIn = defaultPartitionMergeFanIn
+	}
+	if out.PartitionIndexMinRows <= 0 {
+		out.PartitionIndexMinRows = defaultPartitionIndexMinRows
+	}
+	if out.SealCheckInterval <= 0 {
+		out.SealCheckInterval = defaultSealCheckInterval
+	}
+	if out.MergeCheckInterval <= 0 {
+		out.MergeCheckInterval = defaultMergeCheckInterval
+	}
+	if out.IndexRescanEvery <= 0 {
+		out.IndexRescanEvery = defaultIndexRescanEvery
+	}
+	if out.IndexWorkers <= 0 {
+		out.IndexWorkers = defaultIndexWorkers
+	}
+	if out.MergeWorkers <= 0 {
+		out.MergeWorkers = defaultMergeWorkers
+	}
+	if out.OptimizerQueueCap <= 0 {
+		out.OptimizerQueueCap = defaultOptimizerQueueCap
+	}
+	switch out.WALSyncMode {
+	case WALSyncAlways, WALSyncPeriodic, WALSyncNone:
+	default:
+		out.WALSyncMode = WALSyncAlways
+	}
+	if out.WALQueueSize <= 0 {
+		out.WALQueueSize = defaultWALQueueSize
+	}
+	if out.WALBatchMaxOps <= 0 {
+		out.WALBatchMaxOps = defaultWALBatchMaxOps
+	}
+	if out.WALBatchWait <= 0 {
+		out.WALBatchWait = defaultWALBatchWait
+	}
+	if out.WALSyncInterval <= 0 {
+		out.WALSyncInterval = defaultWALSyncInterval
+	}
+	if out.HNSWConfig.M <= 0 {
+		out.HNSWConfig = hnsw.DefaultConfig()
+	}
+	return out
+}
 
 // Meta stores collection-level settings persisted in meta.bin.
 type Meta struct {
@@ -50,69 +187,7 @@ type Meta struct {
 	Count       uint64 `json:"count"`
 }
 
-// VectorStore implements a WAL + memtable + immutable segment engine.
-//
-// Design notes:
-// - Acknowledged writes only require WAL append + WAL fsync + in-memory apply.
-// - Inserts do not wait for segment flushes or ANN index maintenance.
-// - Segment flush and compaction run in background workers.
-//
-// This removes synchronous write amplification from the foreground insert path.
-type VectorStore struct {
-	mu   sync.RWMutex
-	dir  string
-	meta Meta
-
-	keyToID map[string]uint64
-	idToKey map[uint64]string
-	vectors map[uint64][]float32
-	deleted map[uint64]bool
-	nextID  uint64
-
-	// Memtable keeps the latest operation per key since last WAL rotation.
-	memtable map[string]memRecord
-
-	flushThresholdOps int
-	pendingFlush      []flushTask
-	resourceManager   *resources.Manager
-
-	walFile       *os.File
-	walActivePath string
-	nextWALSeq    uint64
-
-	segments      []segmentMeta
-	nextSegmentID uint64
-
-	flushCh chan struct{}
-	// compaction is decoupled from writes and runs opportunistically.
-	compactCh chan struct{}
-	closeCh   chan struct{}
-	closeOnce sync.Once
-	bgWG      sync.WaitGroup
-	bgCtx     context.Context
-	bgCancel  context.CancelFunc
-}
-
-type memRecord struct {
-	op        byte
-	id        uint64
-	key       string
-	embedding []float32
-}
-
-type flushTask struct {
-	segmentID uint64
-	walPath   string
-	records   []memRecord
-}
-
-type segmentMeta struct {
-	id          uint64
-	path        string
-	recordCount int
-}
-
-// SearchHit is one brute-force search result from a shard.
+// SearchHit is one search result from a shard.
 type SearchHit struct {
 	ID       uint64
 	Key      string
@@ -133,36 +208,619 @@ type BatchInsertResult struct {
 	OldID  uint64
 }
 
+type memRecord struct {
+	op        byte
+	id        uint64
+	key       string
+	embedding []float32
+}
+
+type keyStateShard struct {
+	mu sync.RWMutex
+	m  map[string]uint64
+}
+
+type keyState struct {
+	shards []keyStateShard
+}
+
+func newKeyState(stripes int) *keyState {
+	if stripes <= 0 {
+		stripes = defaultActivePartitionStripes
+	}
+	k := &keyState{
+		shards: make([]keyStateShard, stripes),
+	}
+	for i := range k.shards {
+		k.shards[i].m = make(map[string]uint64)
+	}
+	return k
+}
+
+func (k *keyState) shardFor(key string) *keyStateShard {
+	h := fnv32a(key)
+	return &k.shards[h%uint32(len(k.shards))]
+}
+
+func (k *keyState) Get(key string) (uint64, bool) {
+	sh := k.shardFor(key)
+	sh.mu.RLock()
+	id, ok := sh.m[key]
+	sh.mu.RUnlock()
+	return id, ok
+}
+
+func (k *keyState) Set(key string, id uint64) (oldID uint64, existed bool) {
+	sh := k.shardFor(key)
+	sh.mu.Lock()
+	oldID, existed = sh.m[key]
+	sh.m[key] = id
+	sh.mu.Unlock()
+	return oldID, existed
+}
+
+func (k *keyState) Delete(key string) (oldID uint64, existed bool) {
+	sh := k.shardFor(key)
+	sh.mu.Lock()
+	oldID, existed = sh.m[key]
+	if existed {
+		delete(sh.m, key)
+	}
+	sh.mu.Unlock()
+	return oldID, existed
+}
+
+func (k *keyState) SnapshotValues() []uint64 {
+	out := make([]uint64, 0)
+	for i := range k.shards {
+		sh := &k.shards[i]
+		sh.mu.RLock()
+		for _, id := range sh.m {
+			out = append(out, id)
+		}
+		sh.mu.RUnlock()
+	}
+	return out
+}
+
+type idStateEntry struct {
+	key     string
+	vec     []float32
+	deleted bool
+}
+
+type idStateShard struct {
+	mu sync.RWMutex
+	m  map[uint64]idStateEntry
+}
+
+type idState struct {
+	shards []idStateShard
+}
+
+func newIDState(stripes int) *idState {
+	if stripes <= 0 {
+		stripes = defaultActivePartitionStripes
+	}
+	s := &idState{
+		shards: make([]idStateShard, stripes),
+	}
+	for i := range s.shards {
+		s.shards[i].m = make(map[uint64]idStateEntry)
+	}
+	return s
+}
+
+func (s *idState) shardFor(id uint64) *idStateShard {
+	return &s.shards[id%uint64(len(s.shards))]
+}
+
+func (s *idState) Put(id uint64, key string, vec []float32, deleted bool) {
+	sh := s.shardFor(id)
+	sh.mu.Lock()
+	sh.m[id] = idStateEntry{
+		key:     key,
+		vec:     cloneEmbedding(vec),
+		deleted: deleted,
+	}
+	sh.mu.Unlock()
+}
+
+func (s *idState) MarkDeleted(id uint64) {
+	sh := s.shardFor(id)
+	sh.mu.Lock()
+	entry, ok := sh.m[id]
+	if ok {
+		entry.deleted = true
+		entry.vec = nil
+		sh.m[id] = entry
+	}
+	sh.mu.Unlock()
+}
+
+func (s *idState) Get(id uint64) (idStateEntry, bool) {
+	sh := s.shardFor(id)
+	sh.mu.RLock()
+	entry, ok := sh.m[id]
+	sh.mu.RUnlock()
+	return entry, ok
+}
+
+type activePartitionStripe struct {
+	mu      sync.RWMutex
+	records map[string]memRecord
+}
+
+type activePartition struct {
+	id        uint64
+	createdAt time.Time
+	stripes   []activePartitionStripe
+	opCount   atomic.Uint64
+	byteSize  atomic.Uint64
+}
+
+func newActivePartition(id uint64, stripes int) *activePartition {
+	if stripes <= 0 {
+		stripes = defaultActivePartitionStripes
+	}
+	p := &activePartition{
+		id:        id,
+		createdAt: time.Now().UTC(),
+		stripes:   make([]activePartitionStripe, stripes),
+	}
+	for i := range p.stripes {
+		p.stripes[i].records = make(map[string]memRecord)
+	}
+	return p
+}
+
+func (p *activePartition) stripeFor(key string) *activePartitionStripe {
+	h := fnv32a(key)
+	return &p.stripes[h%uint32(len(p.stripes))]
+}
+
+func (p *activePartition) apply(rec memRecord) {
+	stripe := p.stripeFor(rec.key)
+	stripe.mu.Lock()
+	stripe.records[rec.key] = memRecord{
+		op:        rec.op,
+		id:        rec.id,
+		key:       rec.key,
+		embedding: cloneEmbedding(rec.embedding),
+	}
+	stripe.mu.Unlock()
+
+	p.opCount.Add(1)
+	if rec.op == opUpsert {
+		p.byteSize.Add(uint64(len(rec.embedding)) * 4)
+	}
+}
+
+func (p *activePartition) snapshotRecords() []memRecord {
+	keys := make([]string, 0)
+	keyToStripe := make(map[string]int)
+	for i := range p.stripes {
+		stripe := &p.stripes[i]
+		stripe.mu.RLock()
+		for key := range stripe.records {
+			keys = append(keys, key)
+			keyToStripe[key] = i
+		}
+		stripe.mu.RUnlock()
+	}
+	sort.Strings(keys)
+
+	out := make([]memRecord, 0, len(keys))
+	for _, key := range keys {
+		i := keyToStripe[key]
+		stripe := &p.stripes[i]
+		stripe.mu.RLock()
+		rec := stripe.records[key]
+		stripe.mu.RUnlock()
+		out = append(out, memRecord{
+			op:        rec.op,
+			id:        rec.id,
+			key:       rec.key,
+			embedding: cloneEmbedding(rec.embedding),
+		})
+	}
+	return out
+}
+
+func (p *activePartition) shouldSeal(opts Options) bool {
+	return int(p.opCount.Load()) >= opts.ActivePartitionMaxOps || p.byteSize.Load() >= opts.ActivePartitionMaxBytes
+}
+
+type sealedPartition struct {
+	id        uint64
+	createdAt time.Time
+	walPath   string
+
+	records []memRecord
+	vectors map[uint64][]float32
+	keys    map[uint64]string
+
+	persisted atomic.Bool
+	indexing  atomic.Bool
+	merging   atomic.Bool
+	index     atomic.Pointer[hnsw.Index]
+}
+
+func newSealedPartition(id uint64, records []memRecord) *sealedPartition {
+	p := &sealedPartition{
+		id:        id,
+		createdAt: time.Now().UTC(),
+		records:   make([]memRecord, 0, len(records)),
+		vectors:   make(map[uint64][]float32),
+		keys:      make(map[uint64]string),
+	}
+	for _, rec := range records {
+		cp := memRecord{
+			op:        rec.op,
+			id:        rec.id,
+			key:       rec.key,
+			embedding: cloneEmbedding(rec.embedding),
+		}
+		p.records = append(p.records, cp)
+		if cp.op == opUpsert {
+			p.vectors[cp.id] = cloneEmbedding(cp.embedding)
+			p.keys[cp.id] = cp.key
+		}
+	}
+	return p
+}
+
+func (p *sealedPartition) indexReady() bool {
+	return p.index.Load() != nil
+}
+
+type walAppendReq struct {
+	ctx     context.Context
+	records []memRecord
+	resp    chan error
+}
+
+type walRotateReq struct {
+	ctx         context.Context
+	rotatedPath string
+	resp        chan error
+}
+
+type walCloseReq struct {
+	resp chan error
+}
+
+type walWriter struct {
+	activePath string
+	syncMode   WALSyncMode
+	batchWait  time.Duration
+	batchMax   int
+	syncEvery  time.Duration
+
+	appendCh chan walAppendReq
+	rotateCh chan walRotateReq
+	closeCh  chan walCloseReq
+
+	wg sync.WaitGroup
+}
+
+func newWALWriter(activePath string, opts Options) (*walWriter, error) {
+	if err := os.MkdirAll(filepath.Dir(activePath), 0o755); err != nil {
+		return nil, fmt.Errorf("create wal dir: %w", err)
+	}
+	f, err := openWALForAppend(activePath)
+	if err != nil {
+		return nil, err
+	}
+
+	w := &walWriter{
+		activePath: activePath,
+		syncMode:   opts.WALSyncMode,
+		batchWait:  opts.WALBatchWait,
+		batchMax:   opts.WALBatchMaxOps,
+		syncEvery:  opts.WALSyncInterval,
+		appendCh:   make(chan walAppendReq, opts.WALQueueSize),
+		rotateCh:   make(chan walRotateReq, 8),
+		closeCh:    make(chan walCloseReq, 1),
+	}
+	w.wg.Add(1)
+	go w.loop(f)
+	return w, nil
+}
+
+func (w *walWriter) Append(ctx context.Context, records []memRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	req := walAppendReq{
+		ctx:     ctx,
+		records: records,
+		resp:    make(chan error, 1),
+	}
+	select {
+	case w.appendCh <- req:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-req.resp:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (w *walWriter) Rotate(ctx context.Context, rotatedPath string) error {
+	req := walRotateReq{
+		ctx:         ctx,
+		rotatedPath: rotatedPath,
+		resp:        make(chan error, 1),
+	}
+	select {
+	case w.rotateCh <- req:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-req.resp:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (w *walWriter) Close() error {
+	req := walCloseReq{resp: make(chan error, 1)}
+	w.closeCh <- req
+	err := <-req.resp
+	w.wg.Wait()
+	return err
+}
+
+func (w *walWriter) loop(f *os.File) {
+	defer w.wg.Done()
+	defer f.Close()
+
+	lastSync := time.Now()
+	syncTicker := time.NewTicker(w.syncEvery)
+	defer syncTicker.Stop()
+
+	flushAppendBatch := func(batch []walAppendReq) {
+		if len(batch) == 0 {
+			return
+		}
+		var payload bytes.Buffer
+		var appendErr error
+		for _, req := range batch {
+			for _, rec := range req.records {
+				if err := writeRecord(&payload, rec); err != nil {
+					appendErr = fmt.Errorf("encode wal record: %w", err)
+					break
+				}
+			}
+			if appendErr != nil {
+				break
+			}
+		}
+
+		if appendErr == nil && payload.Len() > 0 {
+			if _, err := f.Seek(0, io.SeekEnd); err != nil {
+				appendErr = fmt.Errorf("seek wal end: %w", err)
+			}
+		}
+		if appendErr == nil && payload.Len() > 0 {
+			if _, err := f.Write(payload.Bytes()); err != nil {
+				appendErr = fmt.Errorf("write wal batch: %w", err)
+			}
+		}
+		if appendErr == nil && w.syncMode == WALSyncAlways {
+			if err := f.Sync(); err != nil {
+				appendErr = fmt.Errorf("sync wal: %w", err)
+			} else {
+				lastSync = time.Now()
+			}
+		}
+		if appendErr == nil && w.syncMode == WALSyncPeriodic && time.Since(lastSync) >= w.syncEvery {
+			if err := f.Sync(); err != nil {
+				appendErr = fmt.Errorf("periodic sync wal: %w", err)
+			} else {
+				lastSync = time.Now()
+			}
+		}
+		for _, req := range batch {
+			req.resp <- appendErr
+		}
+	}
+
+	rotate := func(req walRotateReq) {
+		rotateErr := error(nil)
+		if err := f.Sync(); err != nil {
+			rotateErr = fmt.Errorf("sync wal before rotate: %w", err)
+		}
+		if rotateErr == nil {
+			if err := f.Close(); err != nil {
+				rotateErr = fmt.Errorf("close wal before rotate: %w", err)
+			}
+		}
+		if rotateErr == nil {
+			if err := os.Rename(w.activePath, req.rotatedPath); err != nil {
+				rotateErr = fmt.Errorf("rotate wal file: %w", err)
+			}
+		}
+
+		if rotateErr != nil {
+			req.resp <- rotateErr
+			reopen, err := openWALForAppend(w.activePath)
+			if err == nil {
+				f = reopen
+			}
+			return
+		}
+
+		newFile, err := createFreshWAL(w.activePath)
+		if err != nil {
+			req.resp <- fmt.Errorf("create fresh wal after rotate: %w", err)
+			reopen, reopenErr := openWALForAppend(w.activePath)
+			if reopenErr == nil {
+				f = reopen
+			}
+			return
+		}
+		f = newFile
+		lastSync = time.Now()
+		req.resp <- nil
+	}
+
+	for {
+		select {
+		case closeReq := <-w.closeCh:
+			closeErr := error(nil)
+			if err := f.Sync(); err != nil {
+				closeErr = fmt.Errorf("sync wal on close: %w", err)
+			}
+			if err := f.Close(); err != nil {
+				if closeErr == nil {
+					closeErr = fmt.Errorf("close wal: %w", err)
+				}
+			}
+			closeReq.resp <- closeErr
+			return
+
+		case rotateReq := <-w.rotateCh:
+			rotate(rotateReq)
+
+		case appendReq := <-w.appendCh:
+			batch := make([]walAppendReq, 0, w.batchMax)
+			batch = append(batch, appendReq)
+			waitTimer := time.NewTimer(w.batchWait)
+		collect:
+			for len(batch) < w.batchMax {
+				select {
+				case req := <-w.appendCh:
+					batch = append(batch, req)
+				case rotateReq := <-w.rotateCh:
+					if !waitTimer.Stop() {
+						select {
+						case <-waitTimer.C:
+						default:
+						}
+					}
+					flushAppendBatch(batch)
+					rotate(rotateReq)
+					batch = batch[:0]
+					goto doneCollect
+				case <-waitTimer.C:
+					break collect
+				}
+			}
+			if !waitTimer.Stop() {
+				select {
+				case <-waitTimer.C:
+				default:
+				}
+			}
+		doneCollect:
+			if len(batch) > 0 {
+				flushAppendBatch(batch)
+			}
+
+		case <-syncTicker.C:
+			if w.syncMode == WALSyncPeriodic && time.Since(lastSync) >= w.syncEvery {
+				_ = f.Sync()
+				lastSync = time.Now()
+			}
+		}
+	}
+}
+
+// VectorStore implements a partitioned WAL-backed vector engine.
+//
+// Invariants:
+// - Insert acknowledgements depend only on WAL append durability policy + active partition apply.
+// - Active partition is always included in query fan-out, so successful upserts are immediately queryable.
+// - ANN construction is asynchronous per sealed partition and never blocks inserts.
+type VectorStore struct {
+	dir             string
+	walDir          string
+	partitionsDir   string
+	indexDir        string
+	walActivePath   string
+	resourceManager *resources.Manager
+
+	meta Meta
+	opts Options
+
+	startupRecovery StartupRecovery
+
+	keyState *keyState
+	idState  *idState
+
+	nextID      atomic.Uint64
+	nextWALSeq  atomic.Uint64
+	partitionID atomic.Uint64
+	liveCount   atomic.Int64
+
+	active atomic.Pointer[activePartition]
+
+	sealedMu   sync.RWMutex
+	sealed     []*sealedPartition
+	sealedByID map[uint64]*sealedPartition
+
+	annEnabled atomic.Bool
+	indexCfg   atomic.Value // hnsw.Config
+
+	wal      *walWriter
+	rotateMu sync.Mutex
+
+	sealCh  chan struct{}
+	indexCh chan uint64
+	mergeCh chan struct{}
+
+	closeCh   chan struct{}
+	closeOnce sync.Once
+	closed    atomic.Bool
+	bgCtx     context.Context
+	bgCancel  context.CancelFunc
+	bgWG      sync.WaitGroup
+}
+
 // Open opens or creates a vector store with default compression ("none").
 func Open(dir string, name string, dimension uint32, metric string) (*VectorStore, error) {
-	return OpenWithCompression(dir, name, dimension, metric, "none")
+	return OpenWithOptions(dir, name, dimension, metric, "none", DefaultOptions())
 }
 
 // OpenWithCompression opens or creates a vector store with configurable compression.
 func OpenWithCompression(dir string, name string, dimension uint32, metric, compression string) (*VectorStore, error) {
+	return OpenWithOptions(dir, name, dimension, metric, compression, DefaultOptions())
+}
+
+// OpenWithOptions opens a store with explicit optimizer/WAL/ANN configuration.
+func OpenWithOptions(dir string, name string, dimension uint32, metric, compression string, options Options) (*VectorStore, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create dir: %w", err)
 	}
-
+	opts := normalizeOptions(options)
 	metric = normalizeMetric(metric)
 	compression = normalizeCompression(compression)
-	bgCtx, bgCancel := context.WithCancel(context.Background())
 
+	bgCtx, bgCancel := context.WithCancel(context.Background())
 	vs := &VectorStore{
-		dir:               dir,
-		keyToID:           make(map[string]uint64),
-		idToKey:           make(map[uint64]string),
-		vectors:           make(map[uint64][]float32),
-		deleted:           make(map[uint64]bool),
-		memtable:          make(map[string]memRecord),
-		flushThresholdOps: defaultMemtableFlushOps,
-		walActivePath:     filepath.Join(dir, walActiveFileName),
-		resourceManager:   resources.Global(),
-		flushCh:           make(chan struct{}, 1),
-		compactCh:         make(chan struct{}, 1),
-		closeCh:           make(chan struct{}),
-		bgCtx:             bgCtx,
-		bgCancel:          bgCancel,
+		dir:             dir,
+		walDir:          filepath.Join(dir, walDirName),
+		partitionsDir:   filepath.Join(dir, partitionsDir),
+		indexDir:        filepath.Join(dir, indexDirName),
+		walActivePath:   filepath.Join(dir, walDirName, walActiveName),
+		resourceManager: resources.Global(),
+		opts:            opts,
+		keyState:        newKeyState(opts.ActivePartitionStripes),
+		idState:         newIDState(opts.ActivePartitionStripes),
+		sealedByID:      make(map[uint64]*sealedPartition),
+		sealCh:          make(chan struct{}, opts.OptimizerQueueCap),
+		indexCh:         make(chan uint64, opts.OptimizerQueueCap),
+		mergeCh:         make(chan struct{}, opts.OptimizerQueueCap),
+		closeCh:         make(chan struct{}),
+		bgCtx:           bgCtx,
+		bgCancel:        bgCancel,
 		meta: Meta{
 			Name:        name,
 			Dimension:   dimension,
@@ -171,394 +829,257 @@ func OpenWithCompression(dir string, name string, dimension uint32, metric, comp
 		},
 	}
 
+	vs.annEnabled.Store(opts.ANNEnabled)
+	vs.indexCfg.Store(opts.HNSWConfig)
+
+	if err := os.MkdirAll(vs.walDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create wal dir: %w", err)
+	}
+	if err := os.MkdirAll(vs.partitionsDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create partitions dir: %w", err)
+	}
+	if err := os.MkdirAll(vs.indexDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create index dir: %w", err)
+	}
+
 	if err := vs.loadOrInitializeMeta(name, dimension, metric, compression); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Join(dir, segmentDirName), 0o755); err != nil {
-		return nil, fmt.Errorf("create segment dir: %w", err)
-	}
-	if err := vs.loadSegments(); err != nil {
-		return nil, err
-	}
 
-	rotatedWalPaths, maxWalSeq, err := vs.replayWALFiles()
+	maxPartitionID, err := vs.loadPersistedPartitions()
 	if err != nil {
 		return nil, err
 	}
-	vs.nextWALSeq = maxWalSeq + 1
+	loadedPartitions := len(vs.sealedSnapshot())
+	vs.partitionID.Store(maxPartitionID + 1)
+	vs.active.Store(newActivePartition(vs.partitionID.Load(), opts.ActivePartitionStripes))
+
+	walReplayStarted := time.Now()
+	rotatedWalPaths, maxWALSeq, recoveredOps, err := vs.replayWALFilesToActive()
+	if err != nil {
+		return nil, err
+	}
+	walReplayDuration := time.Since(walReplayStarted)
+	vs.nextWALSeq.Store(maxWALSeq)
 
 	if err := vs.checkpointActiveWAL(rotatedWalPaths); err != nil {
 		return nil, err
 	}
+	lastCheckpoint := checkpointTimestamp(vs.walActivePath)
+	vs.startupRecovery = StartupRecovery{
+		RecoveryNeeded:      recoveredOps > 0,
+		WALReplayDuration:   walReplayDuration,
+		RecoveredOperations: recoveredOps,
+		LoadedPartitions:    loadedPartitions,
+		LastCheckpoint:      lastCheckpoint,
+	}
 
-	vs.meta.Count = uint64(len(vs.keyToID))
-	if err := vs.persistMeta(); err != nil {
-		_ = vs.walFile.Close()
+	walWriter, err := newWALWriter(vs.walActivePath, opts)
+	if err != nil {
 		return nil, err
 	}
+	vs.wal = walWriter
 
 	vs.startBackgroundWorkers()
-	if len(vs.memtable) >= vs.flushThresholdOps {
-		vs.signalFlush()
-	}
-	if len(vs.segments) >= defaultCompactionSegments {
-		vs.signalCompaction()
-	}
-
+	vs.scheduleSeal()
+	vs.scheduleMerge()
+	vs.scheduleAllIndexes()
 	return vs, nil
 }
 
 func (vs *VectorStore) startBackgroundWorkers() {
-	vs.bgWG.Add(2)
-	go vs.flushLoop()
-	go vs.compactionLoop()
-}
+	vs.bgWG.Add(1)
+	go vs.sealLoop()
 
-func (vs *VectorStore) withWorker(op string, fn func() error) error {
-	if vs.resourceManager != nil {
-		for {
-			ctx, cancel := context.WithTimeout(vs.bgCtx, 100*time.Millisecond)
-			err := vs.resourceManager.AcquireWorker(ctx, op)
-			cancel()
-			if err == nil {
-				break
-			}
-			select {
-			case <-vs.closeCh:
-				return context.Canceled
-			default:
-			}
-		}
-		defer vs.resourceManager.ReleaseWorker()
+	for i := 0; i < vs.opts.IndexWorkers; i++ {
+		vs.bgWG.Add(1)
+		go vs.indexLoop()
 	}
-	return fn()
+	for i := 0; i < vs.opts.MergeWorkers; i++ {
+		vs.bgWG.Add(1)
+		go vs.mergeLoop()
+	}
 }
 
-func (vs *VectorStore) flushLoop() {
+func (vs *VectorStore) sealLoop() {
 	defer vs.bgWG.Done()
-	ticker := time.NewTicker(250 * time.Millisecond)
+	ticker := time.NewTicker(vs.opts.SealCheckInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-vs.closeCh:
-			_ = vs.flushCycle(true)
+			_ = vs.sealActive(true)
+			_ = vs.persistPendingPartitions()
 			return
-		case <-vs.flushCh:
-			_ = vs.withWorker("storage_flush", func() error { return vs.flushCycle(false) })
+		case <-vs.sealCh:
+			_ = vs.sealActive(false)
 		case <-ticker.C:
-			_ = vs.withWorker("storage_flush", func() error { return vs.flushCycle(false) })
+			_ = vs.sealActive(false)
+			_ = vs.persistPendingPartitions()
 		}
 	}
 }
 
-func (vs *VectorStore) compactionLoop() {
+func (vs *VectorStore) indexLoop() {
 	defer vs.bgWG.Done()
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(vs.opts.IndexRescanEvery)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-vs.closeCh:
 			return
-		case <-vs.compactCh:
-			_ = vs.withWorker("storage_compaction", func() error { return vs.compactIfNeeded() })
+		case id := <-vs.indexCh:
+			_ = vs.buildPartitionIndex(id)
 		case <-ticker.C:
-			_ = vs.withWorker("storage_compaction", func() error { return vs.compactIfNeeded() })
+			vs.scheduleAllIndexes()
 		}
 	}
 }
 
-func (vs *VectorStore) flushCycle(force bool) error {
-	if err := vs.rotateMemtableForFlush(force); err != nil {
-		return err
-	}
-	if err := vs.processPendingFlushTasks(); err != nil {
-		return err
-	}
-	return nil
-}
+func (vs *VectorStore) mergeLoop() {
+	defer vs.bgWG.Done()
+	ticker := time.NewTicker(vs.opts.MergeCheckInterval)
+	defer ticker.Stop()
 
-func (vs *VectorStore) signalFlush() {
-	select {
-	case vs.flushCh <- struct{}{}:
-	default:
-	}
-}
-
-func (vs *VectorStore) signalFlushLocked() {
-	select {
-	case vs.flushCh <- struct{}{}:
-	default:
-	}
-}
-
-func (vs *VectorStore) signalCompaction() {
-	select {
-	case vs.compactCh <- struct{}{}:
-	default:
-	}
-}
-
-func (vs *VectorStore) rotateMemtableForFlush(force bool) error {
 	for {
-		vs.mu.Lock()
-		shouldRotate := len(vs.memtable) > 0 && (force || len(vs.memtable) >= vs.flushThresholdOps)
-		if !shouldRotate {
-			vs.mu.Unlock()
-			return nil
-		}
-		if err := vs.rotateMemtableLocked(); err != nil {
-			vs.mu.Unlock()
-			return err
-		}
-		vs.mu.Unlock()
-	}
-}
-
-func (vs *VectorStore) rotateMemtableLocked() error {
-	if len(vs.memtable) == 0 {
-		return nil
-	}
-	if vs.walFile == nil {
-		return fmt.Errorf("wal not open")
-	}
-
-	records := vs.memtableRecordsLocked()
-	rotatedWalPath := filepath.Join(vs.dir, fmt.Sprintf("wal-%020d.log", vs.nextWALSeq))
-	vs.nextWALSeq++
-
-	if err := vs.walFile.Sync(); err != nil {
-		return fmt.Errorf("sync active wal before rotation: %w", err)
-	}
-	if err := vs.walFile.Close(); err != nil {
-		return fmt.Errorf("close active wal before rotation: %w", err)
-	}
-	vs.walFile = nil
-
-	if err := os.Rename(vs.walActivePath, rotatedWalPath); err != nil {
-		return fmt.Errorf("rotate wal: %w", err)
-	}
-
-	newWal, err := createFreshWAL(vs.walActivePath)
-	if err != nil {
-		_ = os.Rename(rotatedWalPath, vs.walActivePath)
-		reopened, openErr := openWALForAppend(vs.walActivePath)
-		if openErr == nil {
-			vs.walFile = reopened
-		}
-		return fmt.Errorf("create new active wal: %w", err)
-	}
-	vs.walFile = newWal
-
-	vs.memtable = make(map[string]memRecord)
-	vs.pendingFlush = append(vs.pendingFlush, flushTask{
-		segmentID: vs.nextSegmentID,
-		walPath:   rotatedWalPath,
-		records:   records,
-	})
-	vs.nextSegmentID++
-
-	return nil
-}
-
-func (vs *VectorStore) processPendingFlushTasks() error {
-	for {
-		vs.mu.Lock()
-		if len(vs.pendingFlush) == 0 {
-			vs.mu.Unlock()
-			return nil
-		}
-		task := vs.pendingFlush[0]
-		vs.mu.Unlock()
-
-		segmentPath, err := vs.writeSegment(task.segmentID, task.records)
-		if err != nil {
-			return err
-		}
-
-		_ = os.Remove(task.walPath)
-
-		vs.mu.Lock()
-		if len(vs.pendingFlush) > 0 && vs.pendingFlush[0].segmentID == task.segmentID {
-			vs.pendingFlush = vs.pendingFlush[1:]
-		} else {
-			for i := range vs.pendingFlush {
-				if vs.pendingFlush[i].segmentID == task.segmentID {
-					vs.pendingFlush = append(vs.pendingFlush[:i], vs.pendingFlush[i+1:]...)
-					break
-				}
-			}
-		}
-		vs.segments = append(vs.segments, segmentMeta{
-			id:          task.segmentID,
-			path:        segmentPath,
-			recordCount: len(task.records),
-		})
-		shouldCompact := len(vs.segments) >= defaultCompactionSegments
-		vs.mu.Unlock()
-
-		if shouldCompact {
-			vs.signalCompaction()
+		select {
+		case <-vs.closeCh:
+			return
+		case <-vs.mergeCh:
+			_ = vs.mergeIfNeeded()
+		case <-ticker.C:
+			_ = vs.mergeIfNeeded()
 		}
 	}
 }
 
-func (vs *VectorStore) compactIfNeeded() error {
-	vs.mu.Lock()
-	if len(vs.segments) < defaultCompactionSegments {
-		vs.mu.Unlock()
-		return nil
+func (vs *VectorStore) scheduleSeal() {
+	select {
+	case vs.sealCh <- struct{}{}:
+	default:
 	}
+}
 
-	oldSegments := make([]segmentMeta, len(vs.segments))
-	copy(oldSegments, vs.segments)
-	maxOldSegmentID := oldSegments[len(oldSegments)-1].id
-
-	compactSegmentID := vs.nextSegmentID
-	vs.nextSegmentID++
-	vs.mu.Unlock()
-
-	vs.mu.RLock()
-	activeCount := len(vs.keyToID)
-	dimension := vs.meta.Dimension
-	vs.mu.RUnlock()
-	reserveBytes := uint64(activeCount) * uint64(dimension) * 8
-	if err := vs.resourceManager.WaitForMemory(vs.bgCtx, reserveBytes, "storage_compaction_snapshot"); err != nil {
-		return err
+func (vs *VectorStore) scheduleMerge() {
+	select {
+	case vs.mergeCh <- struct{}{}:
+	default:
 	}
+}
 
-	type activeRecord struct {
-		id        uint64
-		key       string
-		embedding []float32
+func (vs *VectorStore) scheduleIndex(id uint64) {
+	select {
+	case vs.indexCh <- id:
+	default:
 	}
+}
 
-	vs.mu.RLock()
-	active := make([]activeRecord, 0, len(vs.keyToID))
-	for key, id := range vs.keyToID {
-		vec, ok := vs.vectors[id]
-		if !ok {
+func (vs *VectorStore) scheduleAllIndexes() {
+	if !vs.annEnabled.Load() {
+		return
+	}
+	parts := vs.sealedSnapshot()
+	for _, p := range parts {
+		if len(p.vectors) < vs.opts.PartitionIndexMinRows {
 			continue
 		}
-		active = append(active, activeRecord{
-			id:        id,
-			key:       key,
-			embedding: cloneEmbedding(vec),
-		})
+		if p.indexReady() || p.indexing.Load() {
+			continue
+		}
+		vs.scheduleIndex(p.id)
 	}
-	vs.mu.RUnlock()
+}
 
-	sort.Slice(active, func(i, j int) bool {
-		return active[i].id < active[j].id
-	})
-
-	records := make([]memRecord, 0, len(active))
-	for _, item := range active {
-		records = append(records, memRecord{
-			op:        opUpsert,
-			id:        item.id,
-			key:       item.key,
-			embedding: item.embedding,
-		})
-	}
-
-	segmentPath, err := vs.writeSegment(compactSegmentID, records)
-	if err != nil {
-		return err
-	}
-
-	vs.mu.Lock()
-	newerSegments := make([]segmentMeta, 0, len(vs.segments))
-	for _, seg := range vs.segments {
-		if seg.id > maxOldSegmentID {
-			newerSegments = append(newerSegments, seg)
+func (vs *VectorStore) applyRecordToGlobal(rec memRecord) {
+	vs.advanceNextID(rec.id)
+	switch rec.op {
+	case opUpsert:
+		vs.idState.Put(rec.id, rec.key, rec.embedding, false)
+		oldID, existed := vs.keyState.Set(rec.key, rec.id)
+		if !existed {
+			vs.liveCount.Add(1)
+		}
+		if existed && oldID != rec.id {
+			vs.idState.MarkDeleted(oldID)
+		}
+	case opDelete:
+		oldID, existed := vs.keyState.Delete(rec.key)
+		if existed {
+			vs.idState.MarkDeleted(oldID)
+			vs.liveCount.Add(-1)
+		}
+		if rec.id > 0 {
+			vs.idState.MarkDeleted(rec.id)
 		}
 	}
-	vs.segments = append([]segmentMeta{{
-		id:          compactSegmentID,
-		path:        segmentPath,
-		recordCount: len(records),
-	}}, newerSegments...)
-	vs.mu.Unlock()
+}
 
-	for _, seg := range oldSegments {
-		_ = os.Remove(seg.path)
+func (vs *VectorStore) applyRecordToActive(rec memRecord) {
+	active := vs.active.Load()
+	if active == nil {
+		return
 	}
+	active.apply(rec)
+}
 
-	return nil
+func (vs *VectorStore) advanceNextID(id uint64) {
+	for {
+		current := vs.nextID.Load()
+		next := current
+		if id >= current {
+			next = id + 1
+		}
+		if next == current {
+			return
+		}
+		if vs.nextID.CompareAndSwap(current, next) {
+			return
+		}
+	}
+}
+
+func (vs *VectorStore) allocateID() uint64 {
+	return vs.nextID.Add(1) - 1
 }
 
 // Insert adds a key+embedding pair and returns the internal ID.
 func (vs *VectorStore) Insert(ctx context.Context, key string, embedding []float32) (uint64, error) {
-	if err := vs.resourceManager.WaitInsertAllowance(ctx); err != nil {
-		return 0, err
+	if vs.closed.Load() {
+		return 0, context.Canceled
 	}
-	if err := vs.resourceManager.WaitForMemory(ctx, uint64(len(embedding))*8, "storage_insert"); err != nil {
-		return 0, err
-	}
-
-	vs.mu.Lock()
-	defer vs.mu.Unlock()
-
 	if key == "" {
 		return 0, fmt.Errorf("key is required")
 	}
 	if uint32(len(embedding)) != vs.meta.Dimension {
 		return 0, fmt.Errorf("dimension mismatch: got %d, want %d", len(embedding), vs.meta.Dimension)
 	}
-
-	id := vs.nextID
+	id := vs.allocateID()
 	rec := memRecord{
 		op:        opUpsert,
 		id:        id,
 		key:       key,
 		embedding: prepareEmbeddingForWrite(vs.meta.Metric, embedding),
 	}
-
-	// Foreground write path in the new engine:
-	// 1) append WAL record
-	// 2) fsync WAL for durability
-	// 3) apply to in-memory state
-	// No index mutation is performed here.
-	if err := vs.appendWALRecordsLocked([]memRecord{rec}); err != nil {
+	if err := vs.wal.Append(ctx, []memRecord{rec}); err != nil {
 		return 0, err
 	}
 
-	vs.applyRecordToState(rec)
-	vs.applyRecordToMemtable(rec)
-	if len(vs.memtable) >= vs.flushThresholdOps {
-		vs.signalFlushLocked()
-	}
-
+	vs.applyRecordToGlobal(rec)
+	vs.applyRecordToActive(rec)
+	vs.scheduleSeal()
 	return id, nil
 }
 
 // BatchInsert inserts/upserts multiple vectors.
 func (vs *VectorStore) BatchInsert(ctx context.Context, items []BatchInsertItem) ([]BatchInsertResult, error) {
-	if err := vs.resourceManager.WaitInsertAllowance(ctx); err != nil {
-		return nil, err
+	if vs.closed.Load() {
+		return nil, context.Canceled
 	}
-	var reserveBytes uint64
-	for _, item := range items {
-		reserveBytes += uint64(len(item.Embedding)) * 8
-	}
-	if err := vs.resourceManager.WaitForMemory(ctx, reserveBytes, "storage_batch_insert"); err != nil {
-		return nil, err
-	}
-
-	vs.mu.Lock()
-	defer vs.mu.Unlock()
-
 	if len(items) == 0 {
 		return nil, nil
 	}
-
-	nextID := vs.nextID
-	shadowKeyToID := make(map[string]uint64, len(items))
-	records := make([]memRecord, 0, len(items))
-	results := make([]BatchInsertResult, 0, len(items))
-
 	for _, item := range items {
 		if item.Key == "" {
 			return nil, fmt.Errorf("key is required")
@@ -566,282 +1087,1023 @@ func (vs *VectorStore) BatchInsert(ctx context.Context, items []BatchInsertItem)
 		if uint32(len(item.Embedding)) != vs.meta.Dimension {
 			return nil, fmt.Errorf("dimension mismatch: got %d, want %d", len(item.Embedding), vs.meta.Dimension)
 		}
+	}
 
-		oldID, exists := shadowKeyToID[item.Key]
+	records := make([]memRecord, 0, len(items))
+	results := make([]BatchInsertResult, 0, len(items))
+	shadow := make(map[string]uint64, len(items))
+	for _, item := range items {
+		oldID, exists := shadow[item.Key]
 		if !exists {
-			oldID, exists = vs.keyToID[item.Key]
+			oldID, exists = vs.keyState.Get(item.Key)
 		}
-
-		id := nextID
-		nextID++
-		shadowKeyToID[item.Key] = id
-
-		result := BatchInsertResult{Key: item.Key, ID: id}
-		if exists {
-			result.HadOld = true
-			result.OldID = oldID
-		}
-		results = append(results, result)
+		id := vs.allocateID()
+		shadow[item.Key] = id
 		records = append(records, memRecord{
 			op:        opUpsert,
 			id:        id,
 			key:       item.Key,
 			embedding: prepareEmbeddingForWrite(vs.meta.Metric, item.Embedding),
 		})
+		result := BatchInsertResult{
+			Key: item.Key,
+			ID:  id,
+		}
+		if exists {
+			result.HadOld = true
+			result.OldID = oldID
+		}
+		results = append(results, result)
 	}
 
-	if err := vs.appendWALRecordsLocked(records); err != nil {
+	if err := vs.wal.Append(ctx, records); err != nil {
 		return nil, err
 	}
-
 	for _, rec := range records {
-		vs.applyRecordToState(rec)
-		vs.applyRecordToMemtable(rec)
+		vs.applyRecordToGlobal(rec)
+		vs.applyRecordToActive(rec)
 	}
-	if len(vs.memtable) >= vs.flushThresholdOps {
-		vs.signalFlushLocked()
-	}
-
+	vs.scheduleSeal()
 	return results, nil
+}
+
+// DeleteWithContext removes a key from the store with caller cancellation.
+func (vs *VectorStore) DeleteWithContext(ctx context.Context, key string) error {
+	if vs.closed.Load() {
+		return context.Canceled
+	}
+	if key == "" {
+		return fmt.Errorf("key is required")
+	}
+	oldID, exists := vs.keyState.Get(key)
+	if !exists {
+		return fmt.Errorf("key not found: %s", key)
+	}
+	rec := memRecord{
+		op:  opDelete,
+		id:  oldID,
+		key: key,
+	}
+	if err := vs.wal.Append(ctx, []memRecord{rec}); err != nil {
+		return err
+	}
+	vs.applyRecordToGlobal(rec)
+	vs.applyRecordToActive(rec)
+	vs.scheduleSeal()
+	return nil
 }
 
 // Delete removes a key from the store.
 func (vs *VectorStore) Delete(key string) error {
-	vs.mu.Lock()
-	defer vs.mu.Unlock()
+	ctx, cancel := context.WithTimeout(vs.bgCtx, 2*time.Second)
+	defer cancel()
+	return vs.DeleteWithContext(ctx, key)
+}
 
-	id, exists := vs.keyToID[key]
-	if !exists {
-		return fmt.Errorf("key not found: %s", key)
+// EnableANN turns on asynchronous ANN optimization with a new HNSW config.
+func (vs *VectorStore) EnableANN(cfg hnsw.Config) {
+	if cfg.M <= 0 {
+		cfg = hnsw.DefaultConfig()
 	}
+	vs.indexCfg.Store(cfg)
+	vs.annEnabled.Store(true)
+	vs.scheduleAllIndexes()
+}
 
-	rec := memRecord{op: opDelete, id: id, key: key}
-	if err := vs.appendWALRecordsLocked([]memRecord{rec}); err != nil {
-		return err
-	}
+// DisableANN turns off ANN serving; search falls back to exact scans.
+func (vs *VectorStore) DisableANN() {
+	vs.annEnabled.Store(false)
+}
 
-	vs.applyRecordToState(rec)
-	vs.applyRecordToMemtable(rec)
-	if len(vs.memtable) >= vs.flushThresholdOps {
-		vs.signalFlushLocked()
-	}
-
-	return nil
+// ANNEnabled reports whether ANN serving is enabled.
+func (vs *VectorStore) ANNEnabled() bool {
+	return vs.annEnabled.Load()
 }
 
 // GetByKey returns the embedding for a given key.
 func (vs *VectorStore) GetByKey(key string) ([]float32, error) {
-	vs.mu.RLock()
-	defer vs.mu.RUnlock()
-
-	id, ok := vs.keyToID[key]
+	id, ok := vs.keyState.Get(key)
 	if !ok {
 		return nil, fmt.Errorf("key not found: %s", key)
 	}
-	vec, ok := vs.vectors[id]
-	if !ok {
+	entry, ok := vs.idState.Get(id)
+	if !ok || entry.deleted {
 		return nil, fmt.Errorf("key not found: %s", key)
 	}
-	return cloneEmbedding(vec), nil
+	current, ok := vs.keyState.Get(key)
+	if !ok || current != id {
+		return nil, fmt.Errorf("key not found: %s", key)
+	}
+	return cloneEmbedding(entry.vec), nil
 }
 
 // GetByID returns the embedding for a given internal ID.
 func (vs *VectorStore) GetByID(id uint64) ([]float32, error) {
-	vs.mu.RLock()
-	defer vs.mu.RUnlock()
-
-	if _, ok := vs.idToKey[id]; !ok {
+	entry, ok := vs.idState.Get(id)
+	if !ok || entry.deleted {
 		return nil, fmt.Errorf("id not found: %d", id)
 	}
-	if vs.deleted[id] {
+	current, ok := vs.keyState.Get(entry.key)
+	if !ok || current != id {
 		return nil, fmt.Errorf("id not found: %d", id)
 	}
-	vec, ok := vs.vectors[id]
-	if !ok {
-		return nil, fmt.Errorf("id not found: %d", id)
-	}
-	return cloneEmbedding(vec), nil
+	return cloneEmbedding(entry.vec), nil
 }
 
 // GetID returns the internal ID for the given key.
 func (vs *VectorStore) GetID(key string) (uint64, bool) {
-	vs.mu.RLock()
-	defer vs.mu.RUnlock()
-	id, ok := vs.keyToID[key]
-	return id, ok
+	return vs.keyState.Get(key)
 }
 
 // GetKey returns the key for a given internal ID.
 func (vs *VectorStore) GetKey(id uint64) (string, bool) {
-	vs.mu.RLock()
-	defer vs.mu.RUnlock()
-	key, ok := vs.idToKey[id]
-	return key, ok
+	entry, ok := vs.idState.Get(id)
+	if !ok || entry.deleted {
+		return "", false
+	}
+	current, ok := vs.keyState.Get(entry.key)
+	if !ok || current != id {
+		return "", false
+	}
+	return entry.key, true
 }
 
-// ResolveActiveKeys resolves keys for candidate IDs in one lock acquisition.
+// ResolveActiveKeys resolves keys for candidate IDs in one call.
 func (vs *VectorStore) ResolveActiveKeys(ids []uint64) map[uint64]string {
-	vs.mu.RLock()
-	defer vs.mu.RUnlock()
-
 	out := make(map[uint64]string, len(ids))
 	for _, id := range ids {
-		key, ok := vs.idToKey[id]
-		if !ok {
-			continue
+		key, ok := vs.visibleKeyForID(id)
+		if ok {
+			out[id] = key
 		}
-		if vs.deleted[id] {
-			continue
-		}
-		out[id] = key
 	}
 	return out
 }
 
 // IsDeleted checks if an internal ID has been tombstoned.
 func (vs *VectorStore) IsDeleted(id uint64) bool {
-	vs.mu.RLock()
-	defer vs.mu.RUnlock()
-	return vs.deleted[id]
+	entry, ok := vs.idState.Get(id)
+	if !ok {
+		return true
+	}
+	return entry.deleted
 }
 
 // Count returns the number of active (non-deleted) vectors.
 func (vs *VectorStore) Count() uint64 {
-	vs.mu.RLock()
-	defer vs.mu.RUnlock()
-	return uint64(len(vs.keyToID))
+	n := vs.liveCount.Load()
+	if n < 0 {
+		return 0
+	}
+	return uint64(n)
+}
+
+// StartupRecoveryReport returns immutable startup recovery diagnostics for this store.
+func (vs *VectorStore) StartupRecoveryReport() StartupRecovery {
+	return vs.startupRecovery
 }
 
 // Dimension returns the vector dimension for this collection.
 func (vs *VectorStore) Dimension() uint32 {
-	vs.mu.RLock()
-	defer vs.mu.RUnlock()
 	return vs.meta.Dimension
 }
 
 // MetricName returns the metric name.
 func (vs *VectorStore) MetricName() string {
-	vs.mu.RLock()
-	defer vs.mu.RUnlock()
 	return vs.meta.Metric
 }
 
 // CompressionName returns the compression mode for this shard.
 func (vs *VectorStore) CompressionName() string {
-	vs.mu.RLock()
-	defer vs.mu.RUnlock()
 	return vs.meta.Compression
 }
 
 // AllIDs returns all active internal IDs.
 func (vs *VectorStore) AllIDs() []uint64 {
-	vs.mu.RLock()
-	defer vs.mu.RUnlock()
-
-	ids := make([]uint64, 0, len(vs.idToKey))
-	for id := range vs.idToKey {
-		ids = append(ids, id)
-	}
-	return ids
+	return vs.keyState.SnapshotValues()
 }
 
-// SearchBruteForceTopK scans active vectors in memory.
-// Active state already includes WAL-backed memtable writes and segment-backed state.
+func (vs *VectorStore) visibleKeyForID(id uint64) (string, bool) {
+	entry, ok := vs.idState.Get(id)
+	if !ok || entry.deleted {
+		return "", false
+	}
+	current, ok := vs.keyState.Get(entry.key)
+	if !ok || current != id {
+		return "", false
+	}
+	return entry.key, true
+}
+
+// SearchTopK performs fan-out search across active + sealed partitions.
+func (vs *VectorStore) SearchTopK(ctx context.Context, query []float32, topK int, efSearch int) ([]SearchHit, error) {
+	return vs.searchInternal(ctx, query, topK, efSearch, vs.annEnabled.Load())
+}
+
+// SearchBruteForceTopK performs exact fan-out scans across active + sealed partitions.
 func (vs *VectorStore) SearchBruteForceTopK(ctx context.Context, query []float32, topK int) ([]SearchHit, error) {
+	return vs.searchInternal(ctx, query, topK, 0, false)
+}
+
+func (vs *VectorStore) searchInternal(ctx context.Context, query []float32, topK int, efSearch int, allowANN bool) ([]SearchHit, error) {
 	if topK <= 0 {
 		return nil, nil
 	}
-
-	type activeEntry struct {
-		id        uint64
-		key       string
-		embedding []float32
+	if uint32(len(query)) != vs.meta.Dimension {
+		return nil, fmt.Errorf("dimension mismatch: got %d, want %d", len(query), vs.meta.Dimension)
+	}
+	if vs.meta.Metric == "cosine" {
+		query = prepareEmbeddingForWrite(vs.meta.Metric, query)
+	}
+	candidateK := topK * 2
+	if candidateK < 32 {
+		candidateK = 32
+	}
+	if efSearch <= 0 {
+		cfg, _ := vs.indexCfg.Load().(hnsw.Config)
+		efSearch = cfg.EfSearch
+		if efSearch <= 0 {
+			efSearch = 64
+		}
 	}
 
-	vs.mu.RLock()
-	dimension := vs.meta.Dimension
-	metric := vs.meta.Metric
-	activeCount := len(vs.keyToID)
-	vs.mu.RUnlock()
+	best := &searchHitMaxHeap{}
+	heap.Init(best)
 
-	if err := vs.resourceManager.WaitForMemory(ctx, uint64(activeCount)*uint64(dimension)*4, "storage_search_snapshot"); err != nil {
+	active := vs.active.Load()
+	if active != nil {
+		activeHits, err := vs.searchActive(ctx, active, query, topK)
+		if err != nil {
+			return nil, err
+		}
+		for _, hit := range activeHits {
+			pushSearchHit(best, hit, topK)
+		}
+	}
+
+	for _, part := range vs.sealedSnapshot() {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		var partHits []SearchHit
+		var err error
+		if allowANN && part.indexReady() {
+			partHits, err = vs.searchSealedANN(ctx, part, query, topK, candidateK, efSearch)
+		} else {
+			partHits, err = vs.searchSealedBruteForce(ctx, part, query, topK)
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, hit := range partHits {
+			pushSearchHit(best, hit, topK)
+		}
+	}
+
+	return heapToAscending(best), nil
+}
+
+func (vs *VectorStore) searchActive(ctx context.Context, part *activePartition, query []float32, topK int) ([]SearchHit, error) {
+	distance := buildDistanceEvaluator(vs.meta.Metric, query)
+	best := &searchHitMaxHeap{}
+	heap.Init(best)
+
+	for i := range part.stripes {
+		stripe := &part.stripes[i]
+		stripe.mu.RLock()
+		candidates := make([]memRecord, 0, len(stripe.records))
+		for _, rec := range stripe.records {
+			if rec.op == opUpsert {
+				candidates = append(candidates, rec)
+			}
+		}
+		stripe.mu.RUnlock()
+
+		for _, rec := range candidates {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			key, ok := vs.visibleKeyForID(rec.id)
+			if !ok {
+				continue
+			}
+			dist := distance(rec.embedding)
+			pushSearchHit(best, SearchHit{
+				ID:       rec.id,
+				Key:      key,
+				Distance: dist,
+			}, topK)
+		}
+	}
+	return heapToAscending(best), nil
+}
+
+func (vs *VectorStore) searchSealedANN(ctx context.Context, part *sealedPartition, query []float32, topK, candidateK, efSearch int) ([]SearchHit, error) {
+	idx := part.index.Load()
+	if idx == nil {
+		return vs.searchSealedBruteForce(ctx, part, query, topK)
+	}
+	results, err := idx.Search(query, candidateK, efSearch)
+	if err != nil {
 		return nil, err
 	}
 
-	vs.mu.RLock()
-	active := make([]activeEntry, 0, len(vs.keyToID))
-	for key, id := range vs.keyToID {
-		vec, ok := vs.vectors[id]
+	out := make([]SearchHit, 0, len(results))
+	for _, item := range results {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		key, ok := vs.visibleKeyForID(item.ID)
 		if !ok {
 			continue
 		}
-		active = append(active, activeEntry{id: id, key: key, embedding: vec})
-	}
-	vs.mu.RUnlock()
-
-	if uint32(len(query)) != dimension {
-		return nil, fmt.Errorf("dimension mismatch: got %d, want %d", len(query), dimension)
-	}
-	if metric == "cosine" {
-		query = prepareEmbeddingForWrite(metric, query)
-	}
-	if len(active) == 0 {
-		return nil, nil
-	}
-
-	sort.Slice(active, func(i, j int) bool {
-		return active[i].id < active[j].id
-	})
-
-	distance := buildDistanceEvaluator(metric, query)
-	limit := topK
-	if len(active) < limit {
-		limit = len(active)
-	}
-	best := make([]SearchHit, 0, limit)
-
-	for _, item := range active {
-		dist := distance(item.embedding)
-		candidate := SearchHit{
-			ID:       item.id,
-			Key:      item.key,
-			Distance: dist,
+		out = append(out, SearchHit{
+			ID:       item.ID,
+			Key:      key,
+			Distance: item.Distance,
+		})
+		if len(out) >= topK {
+			break
 		}
-		pushSearchHitTopK(&best, candidate, topK)
 	}
-
-	sort.Slice(best, func(i, j int) bool {
-		if best[i].Distance == best[j].Distance {
-			return best[i].Key < best[j].Key
-		}
-		return best[i].Distance < best[j].Distance
-	})
-
-	return best, nil
+	return out, nil
 }
 
-func pushSearchHitTopK(best *[]SearchHit, candidate SearchHit, limit int) {
+func (vs *VectorStore) searchSealedBruteForce(ctx context.Context, part *sealedPartition, query []float32, topK int) ([]SearchHit, error) {
+	distance := buildDistanceEvaluator(vs.meta.Metric, query)
+	best := &searchHitMaxHeap{}
+	heap.Init(best)
+
+	for id, vec := range part.vectors {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		key, ok := vs.visibleKeyForID(id)
+		if !ok {
+			continue
+		}
+		dist := distance(vec)
+		pushSearchHit(best, SearchHit{
+			ID:       id,
+			Key:      key,
+			Distance: dist,
+		}, topK)
+	}
+	return heapToAscending(best), nil
+}
+
+func (vs *VectorStore) sealedSnapshot() []*sealedPartition {
+	vs.sealedMu.RLock()
+	out := append([]*sealedPartition(nil), vs.sealed...)
+	vs.sealedMu.RUnlock()
+	return out
+}
+
+func (vs *VectorStore) sealActive(force bool) error {
+	vs.rotateMu.Lock()
+	defer vs.rotateMu.Unlock()
+
+	active := vs.active.Load()
+	if active == nil {
+		return nil
+	}
+	if !force && !active.shouldSeal(vs.opts) {
+		return nil
+	}
+	records := active.snapshotRecords()
+	if len(records) == 0 {
+		return nil
+	}
+
+	rotatedWal := filepath.Join(vs.walDir, fmt.Sprintf("wal-%020d.log", vs.nextWALSeq.Add(1)))
+	rotateCtx, cancel := context.WithTimeout(vs.bgCtx, 5*time.Second)
+	err := vs.wal.Rotate(rotateCtx, rotatedWal)
+	cancel()
+	if err != nil {
+		return err
+	}
+
+	nextPartitionID := vs.partitionID.Add(1)
+	vs.active.Store(newActivePartition(nextPartitionID, vs.opts.ActivePartitionStripes))
+
+	part := newSealedPartition(active.id, records)
+	part.walPath = rotatedWal
+	vs.appendSealedPartition(part)
+
+	if err := vs.persistSealedPartition(part); err != nil {
+		// Keep in-memory partition queryable and WAL file for crash recovery.
+		return err
+	}
+	vs.scheduleIndex(part.id)
+	vs.scheduleMerge()
+	return nil
+}
+
+func (vs *VectorStore) appendSealedPartition(part *sealedPartition) {
+	vs.sealedMu.Lock()
+	vs.sealed = append(vs.sealed, part)
+	sort.Slice(vs.sealed, func(i, j int) bool { return vs.sealed[i].id < vs.sealed[j].id })
+	vs.sealedByID[part.id] = part
+	vs.sealedMu.Unlock()
+}
+
+func (vs *VectorStore) persistPendingPartitions() error {
+	parts := vs.sealedSnapshot()
+	for _, part := range parts {
+		if part.persisted.Load() {
+			continue
+		}
+		if err := vs.persistSealedPartition(part); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (vs *VectorStore) persistSealedPartition(part *sealedPartition) error {
+	if part.persisted.Load() {
+		return nil
+	}
+
+	path := vs.partitionPath(part.id)
+	tmp := path + ".tmp"
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("ensure partition dir: %w", err)
+	}
+	f, err := os.Create(tmp)
+	if err != nil {
+		return fmt.Errorf("create partition temp: %w", err)
+	}
+	if err := writeLogHeader(f, partitionMagic, partitionVersion); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write partition header: %w", err)
+	}
+	for _, rec := range part.records {
+		if err := writeRecord(f, rec); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write partition record: %w", err)
+		}
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("sync partition file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close partition temp: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("commit partition file: %w", err)
+	}
+
+	part.persisted.Store(true)
+	if part.walPath != "" {
+		_ = os.Remove(part.walPath)
+		part.walPath = ""
+	}
+	return nil
+}
+
+func (vs *VectorStore) partitionPath(partitionID uint64) string {
+	return filepath.Join(vs.partitionsDir, fmt.Sprintf("partition-%020d%s", partitionID, partitionFileExt))
+}
+
+func (vs *VectorStore) partitionIndexPath(partitionID uint64) string {
+	return filepath.Join(vs.indexDir, fmt.Sprintf("partition-%020d", partitionID))
+}
+
+func (vs *VectorStore) buildPartitionIndex(partitionID uint64) error {
+	if !vs.annEnabled.Load() {
+		return nil
+	}
+	part := vs.partitionByID(partitionID)
+	if part == nil {
+		return nil
+	}
+	if len(part.vectors) < vs.opts.PartitionIndexMinRows {
+		return nil
+	}
+	if part.indexReady() {
+		return nil
+	}
+	if !part.indexing.CompareAndSwap(false, true) {
+		return nil
+	}
+	defer part.indexing.Store(false)
+
+	waitCtx, cancel := context.WithTimeout(vs.bgCtx, 2*time.Second)
+	defer cancel()
+	if err := vs.resourceManager.WaitIndexingAllowance(waitCtx); err != nil {
+		return err
+	}
+
+	cfg, _ := vs.indexCfg.Load().(hnsw.Config)
+	if cfg.M <= 0 {
+		cfg = hnsw.DefaultConfig()
+	}
+	distFunc := getDistanceFunc(vs.meta.Metric)
+	queryFactory := getDistanceQueryFactory(vs.meta.Metric)
+	idx := hnsw.New(cfg, distFunc, func(id uint64) ([]float32, error) {
+		vec, ok := part.vectors[id]
+		if !ok {
+			return nil, fmt.Errorf("id %d not found in partition", id)
+		}
+		return vec, nil
+	})
+	idx.SetQueryDistanceFactory(queryFactory)
+
+	ids := make([]uint64, 0, len(part.vectors))
+	for id := range part.vectors {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	for _, id := range ids {
+		if err := vs.bgCtx.Err(); err != nil {
+			return err
+		}
+		if err := idx.Insert(id); err != nil {
+			return fmt.Errorf("insert id %d into partition index: %w", id, err)
+		}
+	}
+
+	indexPath := vs.partitionIndexPath(part.id)
+	if err := os.MkdirAll(indexPath, 0o755); err != nil {
+		return fmt.Errorf("create partition index dir: %w", err)
+	}
+	if err := idx.Save(indexPath); err != nil {
+		// Keep in-memory index even when fs persistence fails.
+		part.index.Store(idx)
+		return fmt.Errorf("persist partition index: %w", err)
+	}
+	part.index.Store(idx)
+	return nil
+}
+
+func (vs *VectorStore) partitionByID(id uint64) *sealedPartition {
+	vs.sealedMu.RLock()
+	part := vs.sealedByID[id]
+	vs.sealedMu.RUnlock()
+	return part
+}
+
+func (vs *VectorStore) mergeIfNeeded() error {
+	parts := vs.sealedSnapshot()
+	if len(parts) <= vs.opts.PartitionMaxCount {
+		return nil
+	}
+	mergeN := vs.opts.PartitionMergeFanIn
+	if mergeN > len(parts) {
+		mergeN = len(parts)
+	}
+	candidates := make([]*sealedPartition, 0, mergeN)
+	for _, p := range parts {
+		if !p.persisted.Load() {
+			continue
+		}
+		if !p.merging.CompareAndSwap(false, true) {
+			continue
+		}
+		candidates = append(candidates, p)
+		if len(candidates) >= mergeN {
+			break
+		}
+	}
+	if len(candidates) < 2 {
+		for _, p := range candidates {
+			p.merging.Store(false)
+		}
+		return nil
+	}
+	defer func() {
+		for _, p := range candidates {
+			p.merging.Store(false)
+		}
+	}()
+
+	replayed := make(map[string]memRecord, 0)
+	for _, p := range candidates {
+		for _, rec := range p.records {
+			replayed[rec.key] = memRecord{
+				op:        rec.op,
+				id:        rec.id,
+				key:       rec.key,
+				embedding: cloneEmbedding(rec.embedding),
+			}
+		}
+	}
+	keys := make([]string, 0, len(replayed))
+	for key := range replayed {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	mergedRecords := make([]memRecord, 0, len(keys))
+	for _, key := range keys {
+		mergedRecords = append(mergedRecords, replayed[key])
+	}
+	newPartID := vs.partitionID.Add(1)
+	newPart := newSealedPartition(newPartID, mergedRecords)
+	if err := vs.persistSealedPartition(newPart); err != nil {
+		return err
+	}
+
+	removeIDs := make(map[uint64]struct{}, len(candidates))
+	for _, p := range candidates {
+		removeIDs[p.id] = struct{}{}
+	}
+
+	vs.sealedMu.Lock()
+	nextList := make([]*sealedPartition, 0, len(vs.sealed)-len(candidates)+1)
+	for _, p := range vs.sealed {
+		if _, drop := removeIDs[p.id]; drop {
+			delete(vs.sealedByID, p.id)
+			continue
+		}
+		nextList = append(nextList, p)
+	}
+	nextList = append(nextList, newPart)
+	sort.Slice(nextList, func(i, j int) bool { return nextList[i].id < nextList[j].id })
+	vs.sealed = nextList
+	vs.sealedByID[newPart.id] = newPart
+	vs.sealedMu.Unlock()
+
+	for _, oldPart := range candidates {
+		_ = os.Remove(vs.partitionPath(oldPart.id))
+		_ = os.RemoveAll(vs.partitionIndexPath(oldPart.id))
+	}
+	vs.scheduleIndex(newPart.id)
+	return nil
+}
+
+func (vs *VectorStore) loadPersistedPartitions() (uint64, error) {
+	entries, err := os.ReadDir(vs.partitionsDir)
+	if err != nil {
+		return 0, fmt.Errorf("read partition dir: %w", err)
+	}
+	type partRef struct {
+		id   uint64
+		path string
+	}
+	parts := make([]partRef, 0, len(entries))
+	var maxID uint64
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		id, ok := parsePartitionID(entry.Name())
+		if !ok {
+			continue
+		}
+		parts = append(parts, partRef{
+			id:   id,
+			path: filepath.Join(vs.partitionsDir, entry.Name()),
+		})
+		if id > maxID {
+			maxID = id
+		}
+	}
+	sort.Slice(parts, func(i, j int) bool { return parts[i].id < parts[j].id })
+
+	for _, part := range parts {
+		records, err := readPartitionFile(part.path, vs.meta.Dimension)
+		if err != nil {
+			return maxID, fmt.Errorf("read partition %s: %w", part.path, err)
+		}
+		sealed := newSealedPartition(part.id, records)
+		sealed.persisted.Store(true)
+		vs.appendSealedPartition(sealed)
+		for _, rec := range records {
+			vs.applyRecordToGlobal(rec)
+		}
+		_ = vs.loadPartitionIndex(sealed)
+	}
+	return maxID, nil
+}
+
+func (vs *VectorStore) loadPartitionIndex(part *sealedPartition) error {
+	if !vs.annEnabled.Load() {
+		return nil
+	}
+	indexPath := vs.partitionIndexPath(part.id)
+	if _, err := os.Stat(filepath.Join(indexPath, "hnsw.graph")); err != nil {
+		return nil
+	}
+	distFunc := getDistanceFunc(vs.meta.Metric)
+	idx, err := hnsw.Load(indexPath, distFunc, func(id uint64) ([]float32, error) {
+		vec, ok := part.vectors[id]
+		if !ok {
+			return nil, fmt.Errorf("id %d missing in partition %d", id, part.id)
+		}
+		return vec, nil
+	})
+	if err != nil {
+		return err
+	}
+	idx.SetQueryDistanceFactory(getDistanceQueryFactory(vs.meta.Metric))
+	part.index.Store(idx)
+	return nil
+}
+
+func parsePartitionID(name string) (uint64, bool) {
+	if !strings.HasPrefix(name, "partition-") || !strings.HasSuffix(name, partitionFileExt) {
+		return 0, false
+	}
+	idPart := strings.TrimSuffix(strings.TrimPrefix(name, "partition-"), partitionFileExt)
+	id, err := strconv.ParseUint(idPart, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
+}
+
+func readPartitionFile(path string, dimension uint32) ([]memRecord, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if err := readLogHeader(f, partitionMagic, partitionVersion); err != nil {
+		return nil, err
+	}
+	records := make([]memRecord, 0, 1024)
+	for {
+		rec, err := readRecord(f, dimension, false)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return nil, err
+		}
+		records = append(records, rec)
+	}
+	return records, nil
+}
+
+func parseWALSeq(name string) (uint64, bool) {
+	if !strings.HasPrefix(name, "wal-") || !strings.HasSuffix(name, ".log") {
+		return 0, false
+	}
+	if name == walActiveName {
+		return 0, false
+	}
+	seqPart := strings.TrimSuffix(strings.TrimPrefix(name, "wal-"), ".log")
+	seq, err := strconv.ParseUint(seqPart, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return seq, true
+}
+
+func (vs *VectorStore) replayWALFilesToActive() ([]string, uint64, int, error) {
+	entries, err := os.ReadDir(vs.walDir)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("read wal dir: %w", err)
+	}
+
+	type walRef struct {
+		seq  uint64
+		path string
+	}
+	rotated := make([]walRef, 0, len(entries))
+	activeExists := false
+	var maxSeq uint64
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if name == walActiveName {
+			activeExists = true
+			continue
+		}
+		seq, ok := parseWALSeq(name)
+		if !ok {
+			continue
+		}
+		rotated = append(rotated, walRef{
+			seq:  seq,
+			path: filepath.Join(vs.walDir, name),
+		})
+		if seq > maxSeq {
+			maxSeq = seq
+		}
+	}
+	sort.Slice(rotated, func(i, j int) bool { return rotated[i].seq < rotated[j].seq })
+
+	removeAfterCheckpoint := make([]string, 0, len(rotated))
+	var recoveredOps int
+	for _, walRef := range rotated {
+		count, err := vs.replayWALFile(walRef.path)
+		if err != nil {
+			return nil, maxSeq, recoveredOps, fmt.Errorf("replay wal %s: %w", walRef.path, err)
+		}
+		recoveredOps += count
+		removeAfterCheckpoint = append(removeAfterCheckpoint, walRef.path)
+	}
+	if activeExists {
+		count, err := vs.replayWALFile(vs.walActivePath)
+		if err != nil {
+			return nil, maxSeq, recoveredOps, fmt.Errorf("replay active wal: %w", err)
+		}
+		recoveredOps += count
+	}
+	return removeAfterCheckpoint, maxSeq, recoveredOps, nil
+}
+
+func (vs *VectorStore) replayWALFile(path string) (int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	if info.Size() == 0 {
+		return 0, nil
+	}
+
+	if err := readLogHeader(f, walMagic, walVersion); err != nil {
+		return 0, err
+	}
+	var replayed int
+	for {
+		rec, err := readRecord(f, vs.meta.Dimension, true)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return replayed, nil
+			}
+			return replayed, err
+		}
+		vs.applyRecordToGlobal(rec)
+		vs.applyRecordToActive(rec)
+		replayed++
+	}
+}
+
+func checkpointTimestamp(path string) time.Time {
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime().UTC()
+}
+
+func (vs *VectorStore) checkpointActiveWAL(rotatedWalPaths []string) error {
+	f, err := createFreshWAL(vs.walActivePath)
+	if err != nil {
+		return err
+	}
+	active := vs.active.Load()
+	if active != nil {
+		for _, rec := range active.snapshotRecords() {
+			if err := writeRecord(f, rec); err != nil {
+				_ = f.Close()
+				return fmt.Errorf("checkpoint wal record: %w", err)
+			}
+		}
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("sync checkpoint wal: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close checkpoint wal: %w", err)
+	}
+	for _, path := range rotatedWalPaths {
+		_ = os.Remove(path)
+	}
+	return nil
+}
+
+// Close closes open resources and flushes pending background work.
+func (vs *VectorStore) Close() error {
+	var closeErr error
+	vs.closeOnce.Do(func() {
+		vs.closed.Store(true)
+		close(vs.closeCh)
+		vs.bgCancel()
+		vs.bgWG.Wait()
+
+		var errs []error
+		if vs.wal != nil {
+			if err := vs.wal.Close(); err != nil {
+				errs = append(errs, err)
+			}
+			vs.wal = nil
+		}
+
+		vs.meta.Count = vs.Count()
+		if err := vs.persistMeta(); err != nil {
+			errs = append(errs, err)
+		}
+		closeErr = errors.Join(errs...)
+	})
+	return closeErr
+}
+
+func (vs *VectorStore) loadOrInitializeMeta(name string, dimension uint32, metric, compression string) error {
+	metaPath := filepath.Join(vs.dir, metaFileName)
+	m, err := readMeta(metaPath)
+	if err == nil {
+		vs.meta = m
+	} else if errors.Is(err, os.ErrNotExist) {
+		vs.meta = Meta{
+			Name:        name,
+			Dimension:   dimension,
+			Metric:      metric,
+			Compression: compression,
+			Count:       0,
+		}
+		if vs.meta.Dimension == 0 {
+			return fmt.Errorf("dimension must be > 0")
+		}
+		if err := vs.persistMeta(); err != nil {
+			return err
+		}
+	} else {
+		return err
+	}
+
+	if vs.meta.Name == "" {
+		vs.meta.Name = name
+	}
+	if vs.meta.Compression == "" {
+		vs.meta.Compression = "none"
+	}
+	vs.meta.Metric = normalizeMetric(vs.meta.Metric)
+	vs.meta.Compression = normalizeCompression(vs.meta.Compression)
+
+	if dimension > 0 && vs.meta.Dimension != dimension {
+		return fmt.Errorf("dimension mismatch for collection %q: existing=%d requested=%d", name, vs.meta.Dimension, dimension)
+	}
+	if metric != "" && vs.meta.Metric != normalizeMetric(metric) {
+		return fmt.Errorf("metric mismatch for collection %q: existing=%s requested=%s", name, vs.meta.Metric, normalizeMetric(metric))
+	}
+	if compression != "" && vs.meta.Compression != normalizeCompression(compression) {
+		return fmt.Errorf("compression mismatch for collection %q: existing=%s requested=%s", name, vs.meta.Compression, normalizeCompression(compression))
+	}
+	return nil
+}
+
+func (vs *VectorStore) persistMeta() error {
+	return writeMeta(filepath.Join(vs.dir, metaFileName), vs.meta)
+}
+
+type searchHitMaxHeap []SearchHit
+
+func (h searchHitMaxHeap) Len() int { return len(h) }
+
+func (h searchHitMaxHeap) Less(i, j int) bool {
+	if h[i].Distance == h[j].Distance {
+		return h[i].Key > h[j].Key
+	}
+	return h[i].Distance > h[j].Distance
+}
+
+func (h searchHitMaxHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *searchHitMaxHeap) Push(x interface{}) {
+	*h = append(*h, x.(SearchHit))
+}
+
+func (h *searchHitMaxHeap) Pop() interface{} {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
+}
+
+func pushSearchHit(h *searchHitMaxHeap, candidate SearchHit, limit int) {
 	if limit <= 0 {
 		return
 	}
-	if len(*best) < limit {
-		*best = append(*best, candidate)
+	if h.Len() < limit {
+		heap.Push(h, candidate)
 		return
 	}
-
-	worstIdx := 0
-	worstDist := (*best)[0].Distance
-	for i := 1; i < len(*best); i++ {
-		if (*best)[i].Distance > worstDist {
-			worstDist = (*best)[i].Distance
-			worstIdx = i
-		}
-	}
-
-	if candidate.Distance >= worstDist {
+	worst := (*h)[0]
+	if candidate.Distance > worst.Distance {
 		return
 	}
-	(*best)[worstIdx] = candidate
+	if candidate.Distance == worst.Distance && candidate.Key >= worst.Key {
+		return
+	}
+	(*h)[0] = candidate
+	heap.Fix(h, 0)
+}
+
+func heapToAscending(h *searchHitMaxHeap) []SearchHit {
+	out := make([]SearchHit, h.Len())
+	for i := len(out) - 1; i >= 0; i-- {
+		out[i] = heap.Pop(h).(SearchHit)
+	}
+	return out
 }
 
 func buildDistanceEvaluator(metric string, query []float32) func(candidate []float32) float32 {
@@ -864,84 +2126,42 @@ func buildDistanceEvaluator(metric string, query []float32) func(candidate []flo
 			return -dot
 		}
 	default:
-		var queryNormSq float32
-		for _, q := range query {
-			queryNormSq += q * q
-		}
-		queryNorm := float32(math.Sqrt(float64(queryNormSq)))
-		if queryNorm == 0 {
-			return func(_ []float32) float32 { return 1.0 }
-		}
-
 		return func(candidate []float32) float32 {
-			var dot, normB float32
+			var dot, normA, normB float32
 			for i, q := range query {
 				v := candidate[i]
 				dot += q * v
+				normA += q * q
 				normB += v * v
 			}
-			if normB == 0 {
-				return 1.0
+			if normA == 0 || normB == 0 {
+				return 1
 			}
-			sim := dot / (queryNorm * float32(math.Sqrt(float64(normB))))
-			if sim > 1 {
-				sim = 1
-			} else if sim < -1 {
-				sim = -1
-			}
-			return 1.0 - sim
+			sim := dot / (float32(math.Sqrt(float64(normA))) * float32(math.Sqrt(float64(normB))))
+			return 1 - sim
 		}
 	}
 }
 
-func (vs *VectorStore) applyRecordToState(rec memRecord) {
-	switch rec.op {
-	case opUpsert:
-		if oldID, exists := vs.keyToID[rec.key]; exists && oldID != rec.id {
-			vs.deleted[oldID] = true
-			delete(vs.idToKey, oldID)
-			delete(vs.vectors, oldID)
-		}
-		vs.keyToID[rec.key] = rec.id
-		vs.idToKey[rec.id] = rec.key
-		vs.vectors[rec.id] = cloneEmbedding(rec.embedding)
-		delete(vs.deleted, rec.id)
-		if rec.id >= vs.nextID {
-			vs.nextID = rec.id + 1
-		}
-	case opDelete:
-		vs.deleted[rec.id] = true
-		if rec.key != "" {
-			if currentID, exists := vs.keyToID[rec.key]; exists && currentID == rec.id {
-				delete(vs.keyToID, rec.key)
-			}
-		}
-		if existingKey, exists := vs.idToKey[rec.id]; exists {
-			delete(vs.idToKey, rec.id)
-			delete(vs.vectors, rec.id)
-			if currentID, ok := vs.keyToID[existingKey]; ok && currentID == rec.id {
-				delete(vs.keyToID, existingKey)
-			}
-		}
+func getDistanceFunc(metric string) hnsw.DistanceFunc {
+	switch metric {
+	case "l2":
+		return hnsw.L2Distance
+	case "dot_product", "cosine":
+		return hnsw.DotProductDistance
+	default:
+		return hnsw.CosineDistance
 	}
-	vs.meta.Count = uint64(len(vs.keyToID))
 }
 
-func (vs *VectorStore) applyRecordToMemtable(rec memRecord) {
-	switch rec.op {
-	case opUpsert:
-		vs.memtable[rec.key] = memRecord{
-			op:        opUpsert,
-			id:        rec.id,
-			key:       rec.key,
-			embedding: cloneEmbedding(rec.embedding),
-		}
-	case opDelete:
-		vs.memtable[rec.key] = memRecord{
-			op:  opDelete,
-			id:  rec.id,
-			key: rec.key,
-		}
+func getDistanceQueryFactory(metric string) hnsw.QueryDistanceFactory {
+	switch metric {
+	case "l2":
+		return hnsw.PrepareL2Distance
+	case "dot_product", "cosine":
+		return hnsw.PrepareDotProductDistance
+	default:
+		return hnsw.PrepareCosineDistance
 	}
 }
 
@@ -959,7 +2179,6 @@ func prepareEmbeddingForWrite(metric string, embedding []float32) []float32 {
 	if metric != "cosine" || len(out) == 0 {
 		return out
 	}
-
 	var normSq float64
 	for _, v := range out {
 		normSq += float64(v) * float64(v)
@@ -967,70 +2186,11 @@ func prepareEmbeddingForWrite(metric string, embedding []float32) []float32 {
 	if normSq == 0 {
 		return out
 	}
-
 	invNorm := float32(1.0 / math.Sqrt(normSq))
 	for i := range out {
 		out[i] *= invNorm
 	}
 	return out
-}
-
-func (vs *VectorStore) appendWALRecordsLocked(records []memRecord) error {
-	if len(records) == 0 {
-		return nil
-	}
-	if vs.walFile == nil {
-		return fmt.Errorf("wal not open")
-	}
-
-	if _, err := vs.walFile.Seek(0, io.SeekEnd); err != nil {
-		return fmt.Errorf("seek wal: %w", err)
-	}
-	for _, rec := range records {
-		if err := writeRecord(vs.walFile, rec); err != nil {
-			return fmt.Errorf("append wal record: %w", err)
-		}
-	}
-	if err := vs.walFile.Sync(); err != nil {
-		return fmt.Errorf("sync wal: %w", err)
-	}
-	return nil
-}
-
-func (vs *VectorStore) writeSegment(segmentID uint64, records []memRecord) (string, error) {
-	segDir := filepath.Join(vs.dir, segmentDirName)
-	if err := os.MkdirAll(segDir, 0o755); err != nil {
-		return "", fmt.Errorf("ensure segment dir: %w", err)
-	}
-
-	segmentPath := filepath.Join(segDir, fmt.Sprintf("segment-%020d.seg", segmentID))
-	tmpPath := segmentPath + ".tmp"
-
-	f, err := os.Create(tmpPath)
-	if err != nil {
-		return "", fmt.Errorf("create segment temp: %w", err)
-	}
-	defer f.Close()
-
-	if err := writeLogHeader(f, segmentMagic, segmentVersion); err != nil {
-		return "", fmt.Errorf("write segment header: %w", err)
-	}
-	for _, rec := range records {
-		if err := writeRecord(f, rec); err != nil {
-			return "", fmt.Errorf("write segment record: %w", err)
-		}
-	}
-	if err := f.Sync(); err != nil {
-		return "", fmt.Errorf("sync segment: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return "", fmt.Errorf("close segment temp: %w", err)
-	}
-	if err := os.Rename(tmpPath, segmentPath); err != nil {
-		return "", fmt.Errorf("commit segment: %w", err)
-	}
-
-	return segmentPath, nil
 }
 
 func writeLogHeader(w io.Writer, magic [8]byte, version uint16) error {
@@ -1073,7 +2233,6 @@ func writeRecord(w io.Writer, rec memRecord) error {
 	if _, err := payload.Write(keyBytes); err != nil {
 		return err
 	}
-
 	if rec.op == opUpsert {
 		if err := binary.Write(&payload, binary.LittleEndian, uint32(len(rec.embedding))); err != nil {
 			return err
@@ -1084,7 +2243,6 @@ func writeRecord(w io.Writer, rec memRecord) error {
 			}
 		}
 	}
-
 	if err := binary.Write(w, binary.LittleEndian, uint32(payload.Len())); err != nil {
 		return err
 	}
@@ -1103,7 +2261,6 @@ func readRecord(r io.Reader, dimension uint32, toleratePartial bool) (memRecord,
 		}
 		return memRecord{}, err
 	}
-
 	payload := make([]byte, recLen)
 	if _, err := io.ReadFull(r, payload); err != nil {
 		if (errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)) && toleratePartial {
@@ -1111,18 +2268,15 @@ func readRecord(r io.Reader, dimension uint32, toleratePartial bool) (memRecord,
 		}
 		return memRecord{}, err
 	}
-
 	reader := bytes.NewReader(payload)
 	var op [1]byte
 	if _, err := io.ReadFull(reader, op[:]); err != nil {
 		return memRecord{}, err
 	}
-
 	var id uint64
 	if err := binary.Read(reader, binary.LittleEndian, &id); err != nil {
 		return memRecord{}, err
 	}
-
 	var keyLen uint32
 	if err := binary.Read(reader, binary.LittleEndian, &keyLen); err != nil {
 		return memRecord{}, err
@@ -1131,18 +2285,21 @@ func readRecord(r io.Reader, dimension uint32, toleratePartial bool) (memRecord,
 	if _, err := io.ReadFull(reader, keyBytes); err != nil {
 		return memRecord{}, err
 	}
-
-	rec := memRecord{op: op[0], id: id, key: string(keyBytes)}
+	rec := memRecord{
+		op:  op[0],
+		id:  id,
+		key: string(keyBytes),
+	}
 	switch rec.op {
 	case opUpsert:
-		var vectorLen uint32
-		if err := binary.Read(reader, binary.LittleEndian, &vectorLen); err != nil {
+		var vecLen uint32
+		if err := binary.Read(reader, binary.LittleEndian, &vecLen); err != nil {
 			return memRecord{}, err
 		}
-		if dimension > 0 && vectorLen != dimension {
-			return memRecord{}, fmt.Errorf("vector dimension mismatch in log record: got %d want %d", vectorLen, dimension)
+		if dimension > 0 && vecLen != dimension {
+			return memRecord{}, fmt.Errorf("vector dimension mismatch in log record: got %d want %d", vecLen, dimension)
 		}
-		rec.embedding = make([]float32, vectorLen)
+		rec.embedding = make([]float32, vecLen)
 		for i := range rec.embedding {
 			var bits uint32
 			if err := binary.Read(reader, binary.LittleEndian, &bits); err != nil {
@@ -1151,15 +2308,12 @@ func readRecord(r io.Reader, dimension uint32, toleratePartial bool) (memRecord,
 			rec.embedding[i] = math.Float32frombits(bits)
 		}
 	case opDelete:
-		// no vector payload
 	default:
 		return memRecord{}, fmt.Errorf("unknown record op %d", rec.op)
 	}
-
 	if reader.Len() != 0 {
 		return memRecord{}, fmt.Errorf("extra bytes at end of record")
 	}
-
 	return rec, nil
 }
 
@@ -1168,7 +2322,6 @@ func openWALForAppend(path string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open wal: %w", err)
 	}
-
 	info, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
@@ -1186,14 +2339,13 @@ func openWALForAppend(path string) (*os.File, error) {
 	} else {
 		if _, err := f.Seek(0, io.SeekStart); err != nil {
 			_ = f.Close()
-			return nil, fmt.Errorf("seek wal header: %w", err)
+			return nil, fmt.Errorf("seek wal start: %w", err)
 		}
 		if err := readLogHeader(f, walMagic, walVersion); err != nil {
 			_ = f.Close()
 			return nil, fmt.Errorf("read wal header: %w", err)
 		}
 	}
-
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("seek wal end: %w", err)
@@ -1221,322 +2373,6 @@ func createFreshWAL(path string) (*os.File, error) {
 	return f, nil
 }
 
-func (vs *VectorStore) loadSegments() error {
-	segDir := filepath.Join(vs.dir, segmentDirName)
-	entries, err := os.ReadDir(segDir)
-	if err != nil {
-		return fmt.Errorf("read segment dir: %w", err)
-	}
-
-	segments := make([]segmentMeta, 0, len(entries))
-	var maxID uint64
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		id, ok := parseSegmentID(entry.Name())
-		if !ok {
-			continue
-		}
-		path := filepath.Join(segDir, entry.Name())
-		segments = append(segments, segmentMeta{id: id, path: path})
-		if id > maxID {
-			maxID = id
-		}
-	}
-
-	sort.Slice(segments, func(i, j int) bool { return segments[i].id < segments[j].id })
-	for i := range segments {
-		count, err := vs.replaySegmentFile(segments[i].path)
-		if err != nil {
-			return fmt.Errorf("replay segment %s: %w", segments[i].path, err)
-		}
-		segments[i].recordCount = count
-	}
-
-	vs.segments = segments
-	if len(segments) == 0 {
-		vs.nextSegmentID = 1
-	} else {
-		vs.nextSegmentID = maxID + 1
-	}
-	return nil
-}
-
-func parseSegmentID(name string) (uint64, bool) {
-	if !strings.HasPrefix(name, "segment-") || !strings.HasSuffix(name, ".seg") {
-		return 0, false
-	}
-	idPart := strings.TrimSuffix(strings.TrimPrefix(name, "segment-"), ".seg")
-	id, err := strconv.ParseUint(idPart, 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return id, true
-}
-
-func (vs *VectorStore) replaySegmentFile(path string) (int, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-
-	if err := readLogHeader(f, segmentMagic, segmentVersion); err != nil {
-		return 0, err
-	}
-
-	count := 0
-	for {
-		rec, err := readRecord(f, vs.meta.Dimension, false)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return count, err
-		}
-		vs.applyRecordToState(rec)
-		count++
-	}
-	return count, nil
-}
-
-func parseRotatedWALSeq(name string) (uint64, bool) {
-	if !strings.HasPrefix(name, "wal-") || !strings.HasSuffix(name, ".log") {
-		return 0, false
-	}
-	if name == walActiveFileName {
-		return 0, false
-	}
-	seqPart := strings.TrimSuffix(strings.TrimPrefix(name, "wal-"), ".log")
-	seq, err := strconv.ParseUint(seqPart, 10, 64)
-	if err != nil {
-		return 0, false
-	}
-	return seq, true
-}
-
-func (vs *VectorStore) replayWALFiles() ([]string, uint64, error) {
-	type walRef struct {
-		seq  uint64
-		path string
-	}
-
-	entries, err := os.ReadDir(vs.dir)
-	if err != nil {
-		return nil, 0, fmt.Errorf("read data dir for wal replay: %w", err)
-	}
-
-	rotated := make([]walRef, 0)
-	activeExists := false
-	var maxSeq uint64
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if name == walActiveFileName {
-			activeExists = true
-			continue
-		}
-		seq, ok := parseRotatedWALSeq(name)
-		if !ok {
-			continue
-		}
-		path := filepath.Join(vs.dir, name)
-		rotated = append(rotated, walRef{seq: seq, path: path})
-		if seq > maxSeq {
-			maxSeq = seq
-		}
-	}
-
-	sort.Slice(rotated, func(i, j int) bool {
-		return rotated[i].seq < rotated[j].seq
-	})
-
-	pathsToRemove := make([]string, 0, len(rotated))
-	for _, wal := range rotated {
-		if _, err := vs.replayWALFile(wal.path); err != nil {
-			return nil, maxSeq, fmt.Errorf("replay rotated wal %s: %w", wal.path, err)
-		}
-		pathsToRemove = append(pathsToRemove, wal.path)
-	}
-	if activeExists {
-		if _, err := vs.replayWALFile(vs.walActivePath); err != nil {
-			return nil, maxSeq, fmt.Errorf("replay active wal: %w", err)
-		}
-	}
-	return pathsToRemove, maxSeq, nil
-}
-
-func (vs *VectorStore) replayWALFile(path string) (int, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return 0, nil
-		}
-		return 0, err
-	}
-	defer f.Close()
-
-	info, err := f.Stat()
-	if err != nil {
-		return 0, err
-	}
-	if info.Size() == 0 {
-		return 0, nil
-	}
-
-	if err := readLogHeader(f, walMagic, walVersion); err != nil {
-		return 0, err
-	}
-
-	count := 0
-	for {
-		rec, err := readRecord(f, vs.meta.Dimension, true)
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return count, err
-		}
-		vs.applyRecordToState(rec)
-		vs.applyRecordToMemtable(rec)
-		count++
-	}
-	return count, nil
-}
-
-func (vs *VectorStore) checkpointActiveWAL(rotatedWalPaths []string) error {
-	f, err := createFreshWAL(vs.walActivePath)
-	if err != nil {
-		return err
-	}
-
-	records := vs.memtableRecordsLocked()
-	for _, rec := range records {
-		if err := writeRecord(f, rec); err != nil {
-			_ = f.Close()
-			return fmt.Errorf("checkpoint wal record: %w", err)
-		}
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("sync checkpoint wal: %w", err)
-	}
-
-	vs.walFile = f
-	for _, path := range rotatedWalPaths {
-		if path == vs.walActivePath {
-			continue
-		}
-		_ = os.Remove(path)
-	}
-	return nil
-}
-
-func (vs *VectorStore) memtableRecordsLocked() []memRecord {
-	keys := make([]string, 0, len(vs.memtable))
-	for key := range vs.memtable {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	records := make([]memRecord, 0, len(keys))
-	for _, key := range keys {
-		rec := vs.memtable[key]
-		records = append(records, memRecord{
-			op:        rec.op,
-			id:        rec.id,
-			key:       rec.key,
-			embedding: cloneEmbedding(rec.embedding),
-		})
-	}
-	return records
-}
-
-// Close closes open resources and flushes pending background work.
-func (vs *VectorStore) Close() error {
-	var closeErr error
-	vs.closeOnce.Do(func() {
-		close(vs.closeCh)
-		vs.bgCancel()
-		vs.bgWG.Wait()
-
-		vs.mu.Lock()
-		defer vs.mu.Unlock()
-
-		var errs []error
-		vs.meta.Count = uint64(len(vs.keyToID))
-		if err := vs.persistMeta(); err != nil {
-			errs = append(errs, err)
-		}
-		if vs.walFile != nil {
-			if err := vs.walFile.Close(); err != nil {
-				errs = append(errs, err)
-			}
-			vs.walFile = nil
-		}
-		closeErr = errors.Join(errs...)
-	})
-	return closeErr
-}
-
-func (vs *VectorStore) loadOrInitializeMeta(name string, dimension uint32, metric, compression string) error {
-	metaPath := filepath.Join(vs.dir, metaFileName)
-	m, err := readMeta(metaPath)
-	if err == nil {
-		vs.meta = m
-	} else if errors.Is(err, os.ErrNotExist) {
-		vs.meta = Meta{
-			Name:        name,
-			Dimension:   dimension,
-			Metric:      metric,
-			Compression: compression,
-			Count:       0,
-		}
-		if vs.meta.Dimension == 0 {
-			return fmt.Errorf("dimension must be > 0")
-		}
-		if vs.meta.Metric == "" {
-			return fmt.Errorf("metric is required")
-		}
-		if err := vs.persistMeta(); err != nil {
-			return err
-		}
-	} else {
-		return err
-	}
-
-	if vs.meta.Name == "" {
-		vs.meta.Name = name
-	}
-	if vs.meta.Compression == "" {
-		vs.meta.Compression = "none"
-	}
-	vs.meta.Metric = normalizeMetric(vs.meta.Metric)
-	vs.meta.Compression = normalizeCompression(vs.meta.Compression)
-
-	if dimension > 0 && vs.meta.Dimension != dimension {
-		return fmt.Errorf("dimension mismatch for collection %q: existing=%d requested=%d", name, vs.meta.Dimension, dimension)
-	}
-	if metric != "" && vs.meta.Metric != normalizeMetric(metric) {
-		return fmt.Errorf("metric mismatch for collection %q: existing=%s requested=%s", name, vs.meta.Metric, normalizeMetric(metric))
-	}
-	if compression != "" && vs.meta.Compression != normalizeCompression(compression) {
-		return fmt.Errorf("compression mismatch for collection %q: existing=%s requested=%s", name, vs.meta.Compression, normalizeCompression(compression))
-	}
-	if vs.meta.Dimension == 0 {
-		return fmt.Errorf("dimension must be > 0")
-	}
-
-	return nil
-}
-
-func (vs *VectorStore) persistMeta() error {
-	return writeMeta(filepath.Join(vs.dir, metaFileName), vs.meta)
-}
-
 func writeMeta(path string, meta Meta) error {
 	metricCode, ok := metricToCode(meta.Metric)
 	if !ok {
@@ -1550,7 +2386,6 @@ func writeMeta(path string, meta Meta) error {
 	if len(nameBytes) > math.MaxUint16 {
 		return fmt.Errorf("name too long")
 	}
-
 	var buf bytes.Buffer
 	buf.Write(metaMagic[:])
 	if err := binary.Write(&buf, binary.LittleEndian, metaVersion); err != nil {
@@ -1574,7 +2409,6 @@ func writeMeta(path string, meta Meta) error {
 	if _, err := buf.Write(nameBytes); err != nil {
 		return err
 	}
-
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("write meta temp: %w", err)
@@ -1591,7 +2425,6 @@ func readMeta(path string) (Meta, error) {
 		return Meta{}, err
 	}
 	defer f.Close()
-
 	var magic [8]byte
 	if _, err := io.ReadFull(f, magic[:]); err != nil {
 		return Meta{}, fmt.Errorf("read meta magic: %w", err)
@@ -1599,7 +2432,6 @@ func readMeta(path string) (Meta, error) {
 	if magic != metaMagic {
 		return Meta{}, fmt.Errorf("invalid meta format")
 	}
-
 	var version uint16
 	if err := binary.Read(f, binary.LittleEndian, &version); err != nil {
 		return Meta{}, err
@@ -1607,7 +2439,6 @@ func readMeta(path string) (Meta, error) {
 	if version != metaVersion {
 		return Meta{}, fmt.Errorf("unsupported meta version %d", version)
 	}
-
 	var dimension uint32
 	var count uint64
 	if err := binary.Read(f, binary.LittleEndian, &dimension); err != nil {
@@ -1616,7 +2447,6 @@ func readMeta(path string) (Meta, error) {
 	if err := binary.Read(f, binary.LittleEndian, &count); err != nil {
 		return Meta{}, err
 	}
-
 	var metricCode [1]byte
 	var compressionCode [1]byte
 	if _, err := io.ReadFull(f, metricCode[:]); err != nil {
@@ -1625,7 +2455,6 @@ func readMeta(path string) (Meta, error) {
 	if _, err := io.ReadFull(f, compressionCode[:]); err != nil {
 		return Meta{}, err
 	}
-
 	var nameLen uint16
 	if err := binary.Read(f, binary.LittleEndian, &nameLen); err != nil {
 		return Meta{}, err
@@ -1634,7 +2463,6 @@ func readMeta(path string) (Meta, error) {
 	if _, err := io.ReadFull(f, nameBytes); err != nil {
 		return Meta{}, err
 	}
-
 	metric, ok := codeToMetric(metricCode[0])
 	if !ok {
 		return Meta{}, fmt.Errorf("invalid metric code %d", metricCode[0])
@@ -1643,7 +2471,6 @@ func readMeta(path string) (Meta, error) {
 	if !ok {
 		return Meta{}, fmt.Errorf("invalid compression code %d", compressionCode[0])
 	}
-
 	return Meta{
 		Name:        string(nameBytes),
 		Dimension:   dimension,
@@ -1719,4 +2546,17 @@ func codeToCompression(code byte) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func fnv32a(s string) uint32 {
+	const (
+		offset32 = 2166136261
+		prime32  = 16777619
+	)
+	hash := uint32(offset32)
+	for i := 0; i < len(s); i++ {
+		hash ^= uint32(s[i])
+		hash *= prime32
+	}
+	return hash
 }

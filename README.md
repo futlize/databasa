@@ -10,7 +10,7 @@ O projeto existe para oferecer uma base vetorial simples de operar, com foco em:
 - API gRPC direta para integracao com qualquer stack
 - persistencia em disco
 - operacao com Docker ou service Linux (systemd)
-- guardrails de recursos e limites operacionais
+- guardrails de API e limites operacionais
 
 ## Escopo atual
 
@@ -21,6 +21,13 @@ O projeto existe para oferecer uma base vetorial simples de operar, com foco em:
 - Porta padrao: `50051`
 - Metricas: `COSINE`, `L2`, `DOT_PRODUCT`
 - Operacoes principais: colecoes, insert/get/delete, batch insert e search
+
+## Arquitetura de ingestao e busca
+
+- Write path desacoplado: `upsert -> WAL (duravel conforme politica) -> active partition`.
+- Busca sempre consulta `active partition` + `sealed partitions`.
+- ANN (HNSW) e merge/compaction rodam em background por particao, sem bloquear ACK de escrita.
+- Depois de `Insert`/`BatchInsert` bem-sucedido, o vetor fica imediatamente consultavel.
 
 ## Uso basico
 
@@ -92,19 +99,39 @@ enable_reflection = false
 [storage]
 data_dir = ./data
 shards = 8
-index_flush_ops = 4096
 compression = int8
+write_mode = strict
+wal_sync_mode = auto
+wal_sync_interval_ms = 10
+wal_batch_wait_ms = 1
+wal_batch_max_ops = 1024
+wal_queue_size = 8192
+active_partition_max_ops = 20000
+active_partition_max_bytes_mb = 64
+partition_max_count = 12
+partition_merge_fan_in = 4
+partition_index_min_rows = 512
+index_workers = 2
+merge_workers = 1
+optimizer_queue_cap = 256
+index_m = 16
+index_ef_construction = 200
+index_ef_search = 50
 
 [guardrails]
 max_top_k = 256
 max_batch_size = 1000
 max_ef_search = 4096
 max_collection_dim = 8192
-max_concurrent_search = 64
-max_concurrent_write = 128
 max_data_dir_mb = 0
 require_rpc_deadline = false
 ```
+
+`write_mode`:
+- `strict`: perfil de durabilidade WAL estrito (default `always`).
+- `performance`: perfil de durabilidade WAL orientado a throughput (default `periodic`).
+
+`wal_sync_mode` (`auto|always|periodic|none`) pode sobrescrever a politica de durabilidade derivada do `write_mode`.
 
 ## Linux service (basico)
 
@@ -128,3 +155,5 @@ databasa logs --follow
 - API detalhada: `README.API.md`
 - Service Linux: `docs/LINUX_SERVICE.md`
 - Configuracao Linux: `README.SERVER.CONFIG.LINUX.md`
+- Arquitetura interna: `ARCHITECTURE.md`
+- Performance/benchmarks: `docs/PERFORMANCE.md`
