@@ -19,6 +19,10 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 SOURCE_BIN="${REPO_ROOT}/bin/${BIN_NAME}"
 SOURCE_CONF="${REPO_ROOT}/databasa.toml"
+RELEASE_REPO="${DATABASA_RELEASE_REPO:-futlize/databasa}"
+RELEASE_TAG="${DATABASA_RELEASE_TAG:-latest}"
+RELEASE_ASSET="${DATABASA_RELEASE_ASSET:-}"
+BIN_URL="${DATABASA_BIN_URL:-}"
 
 INSTALL_ROOT="/usr/local/lib/${DB_NAME}"
 INSTALL_BIN="${INSTALL_ROOT}/${BIN_NAME}"
@@ -48,25 +52,181 @@ fi
 
 BIN_TO_INSTALL=""
 TMP_BIN=""
+TMP_DIR=""
 
 cleanup() {
   if [[ -n "${TMP_BIN}" && -f "${TMP_BIN}" ]]; then
     rm -f "${TMP_BIN}"
   fi
+  if [[ -n "${TMP_DIR}" && -d "${TMP_DIR}" ]]; then
+    rm -rf "${TMP_DIR}"
+  fi
 }
 trap cleanup EXIT
 
-if [[ -x "${SOURCE_BIN}" ]]; then
-  BIN_TO_INSTALL="${SOURCE_BIN}"
-else
-  if ! command -v go >/dev/null 2>&1; then
-    echo "Binary not found at ${SOURCE_BIN} and Go toolchain is unavailable." >&2
-    echo "Build it first with: go build -o ./bin/${BIN_NAME} ./cmd/databasa" >&2
-    exit 1
+have_cmd() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+ensure_tmp_bin() {
+  if [[ -z "${TMP_BIN}" ]]; then
+    TMP_BIN="$(mktemp "/tmp/${BIN_NAME}.XXXXXX")"
   fi
-  TMP_BIN="$(mktemp "/tmp/${BIN_NAME}.XXXXXX")"
+}
+
+ensure_tmp_dir() {
+  if [[ -z "${TMP_DIR}" ]]; then
+    TMP_DIR="$(mktemp -d "/tmp/${BIN_NAME}.XXXXXX")"
+  fi
+}
+
+download_file() {
+  local url="$1"
+  local output="$2"
+  if have_cmd curl; then
+    curl -fsSL "${url}" -o "${output}" >/dev/null 2>&1
+    return $?
+  fi
+  if have_cmd wget; then
+    wget -qO "${output}" "${url}" >/dev/null 2>&1
+    return $?
+  fi
+  return 1
+}
+
+download_binary_from_url() {
+  local url="$1"
+  local archive=""
+  local extract_dir=""
+  local extracted_bin=""
+
+  if [[ "${url}" == *.tar.gz || "${url}" == *.tgz ]]; then
+    ensure_tmp_dir
+    archive="${TMP_DIR}/asset.tgz"
+    extract_dir="${TMP_DIR}/extract"
+    rm -f "${archive}"
+    rm -rf "${extract_dir}"
+    mkdir -p "${extract_dir}"
+    if ! download_file "${url}" "${archive}"; then
+      return 1
+    fi
+    if ! tar -xzf "${archive}" -C "${extract_dir}" >/dev/null 2>&1; then
+      return 1
+    fi
+    extracted_bin="$(find "${extract_dir}" -type f -name "${BIN_NAME}" 2>/dev/null | head -n1 || true)"
+    if [[ -z "${extracted_bin}" ]]; then
+      return 1
+    fi
+    ensure_tmp_bin
+    install -m 0755 "${extracted_bin}" "${TMP_BIN}"
+  else
+    ensure_tmp_bin
+    if ! download_file "${url}" "${TMP_BIN}"; then
+      return 1
+    fi
+    chmod 0755 "${TMP_BIN}"
+  fi
+
+  BIN_TO_INSTALL="${TMP_BIN}"
+  return 0
+}
+
+linux_arch() {
+  local machine
+  machine="$(uname -m)"
+  case "${machine}" in
+    x86_64|amd64) echo "amd64" ;;
+    aarch64|arm64) echo "arm64" ;;
+    *) echo "" ;;
+  esac
+}
+
+download_release_binary() {
+  local arch
+  local base_url
+  local assets=()
+  local asset
+
+  if ! have_cmd curl && ! have_cmd wget; then
+    return 1
+  fi
+
+  arch="$(linux_arch)"
+  if [[ -z "${arch}" ]]; then
+    return 1
+  fi
+
+  if [[ "${RELEASE_TAG}" == "latest" ]]; then
+    base_url="https://github.com/${RELEASE_REPO}/releases/latest/download"
+  else
+    base_url="https://github.com/${RELEASE_REPO}/releases/download/${RELEASE_TAG}"
+  fi
+
+  if [[ -n "${RELEASE_ASSET}" ]]; then
+    assets=("${RELEASE_ASSET}")
+  else
+    assets=(
+      "${BIN_NAME}_linux_${arch}"
+      "${BIN_NAME}-linux-${arch}"
+      "${BIN_NAME}_${arch}"
+      "${BIN_NAME}_linux_${arch}.tar.gz"
+      "${BIN_NAME}-linux-${arch}.tar.gz"
+      "${BIN_NAME}_${arch}.tar.gz"
+      "${BIN_NAME}_linux_${arch}.tgz"
+      "${BIN_NAME}-linux-${arch}.tgz"
+      "${BIN_NAME}_${arch}.tgz"
+    )
+  fi
+
+  for asset in "${assets[@]}"; do
+    if download_binary_from_url "${base_url}/${asset}"; then
+      echo "Downloaded release asset: ${asset}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+build_binary_with_go() {
+  if ! have_cmd go; then
+    return 1
+  fi
+  ensure_tmp_bin
   (cd "${REPO_ROOT}" && go build -o "${TMP_BIN}" ./cmd/databasa)
   BIN_TO_INSTALL="${TMP_BIN}"
+  return 0
+}
+
+if [[ -x "${SOURCE_BIN}" ]]; then
+  BIN_TO_INSTALL="${SOURCE_BIN}"
+elif [[ -n "${BIN_URL}" ]]; then
+  if download_binary_from_url "${BIN_URL}"; then
+    echo "Downloaded binary from DATABASA_BIN_URL."
+  else
+    echo "Warning: failed to download DATABASA_BIN_URL=${BIN_URL}" >&2
+  fi
+fi
+
+if [[ -z "${BIN_TO_INSTALL}" ]]; then
+  download_release_binary || true
+fi
+
+if [[ -z "${BIN_TO_INSTALL}" ]]; then
+  build_binary_with_go || true
+fi
+
+if [[ -z "${BIN_TO_INSTALL}" ]]; then
+  echo "Unable to resolve ${BIN_NAME} binary." >&2
+  echo "Tried:" >&2
+  echo "  1) Local executable at ${SOURCE_BIN}" >&2
+  echo "  2) DATABASA_BIN_URL (if provided)" >&2
+  echo "  3) GitHub release asset from ${RELEASE_REPO} (${RELEASE_TAG})" >&2
+  echo "  4) Local Go toolchain build" >&2
+  echo "Provide one of:" >&2
+  echo "  - ./bin/${BIN_NAME} executable, or" >&2
+  echo "  - DATABASA_BIN_URL with a direct binary or .tar.gz/.tgz archive URL." >&2
+  exit 1
 fi
 
 if ! getent group "${SERVICE_GROUP}" >/dev/null 2>&1; then

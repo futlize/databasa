@@ -12,7 +12,27 @@ Este guia documenta a instalacao e operacao do Databasa como servico systemd no 
 Comandos exatos:
 
 ```bash
-go build -o ./bin/databasa ./cmd/databasa
+sudo ./scripts/install.sh
+```
+
+`scripts/install.sh` resolve o binario nesta ordem:
+
+1. `./bin/databasa` (quando ja existe no repo)
+2. `DATABASA_BIN_URL` (URL direta para binario ou `.tar.gz`/`.tgz`)
+3. Release GitHub precompilada (`latest` por padrao)
+4. Build local com Go (fallback)
+
+Variaveis opcionais para controlar download:
+
+- `DATABASA_BIN_URL`: URL explicita de binario/arquivo.
+- `DATABASA_RELEASE_REPO`: repo para download de release (default: `futlize/databasa`).
+- `DATABASA_RELEASE_TAG`: tag da release (default: `latest`).
+- `DATABASA_RELEASE_ASSET`: nome exato do asset (quando quiser fixar um artefato especifico).
+
+Exemplo sem Go, fixando uma tag:
+
+```bash
+export DATABASA_RELEASE_TAG=v0.1.0
 sudo ./scripts/install.sh
 ```
 

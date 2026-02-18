@@ -109,6 +109,14 @@ require_rpc_deadline = false
 ## Linux service (basico)
 
 ```bash
+# Sem Go (usa release precompilada por padrao):
+sudo ./scripts/install.sh
+
+# Opcional: URL explicita do binario/arquivo .tar.gz/.tgz
+# export DATABASA_BIN_URL="https://.../databasa_linux_amd64"
+# sudo ./scripts/install.sh
+
+# Opcional: compilar localmente (fluxo de desenvolvimento)
 go build -o ./bin/databasa ./cmd/databasa
 sudo ./scripts/install.sh
 databasa status
