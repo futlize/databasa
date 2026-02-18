@@ -208,6 +208,9 @@ type BatchInsertResult struct {
 	OldID  uint64
 }
 
+// memRecord embedding slices become immutable after prepareEmbeddingForWrite.
+// The write path can safely share these slices across id/active/sealed state as
+// read-only data to avoid redundant per-record copies in the hot path.
 type memRecord struct {
 	op        byte
 	id        uint64
@@ -320,7 +323,7 @@ func (s *idState) Put(id uint64, key string, vec []float32, deleted bool) {
 	sh.mu.Lock()
 	sh.m[id] = idStateEntry{
 		key:     key,
-		vec:     cloneEmbedding(vec),
+		vec:     vec,
 		deleted: deleted,
 	}
 	sh.mu.Unlock()
@@ -382,12 +385,7 @@ func (p *activePartition) stripeFor(key string) *activePartitionStripe {
 func (p *activePartition) apply(rec memRecord) {
 	stripe := p.stripeFor(rec.key)
 	stripe.mu.Lock()
-	stripe.records[rec.key] = memRecord{
-		op:        rec.op,
-		id:        rec.id,
-		key:       rec.key,
-		embedding: cloneEmbedding(rec.embedding),
-	}
+	stripe.records[rec.key] = rec
 	stripe.mu.Unlock()
 
 	p.opCount.Add(1)
@@ -397,33 +395,24 @@ func (p *activePartition) apply(rec memRecord) {
 }
 
 func (p *activePartition) snapshotRecords() []memRecord {
-	keys := make([]string, 0)
-	keyToStripe := make(map[string]int)
+	total := 0
 	for i := range p.stripes {
 		stripe := &p.stripes[i]
 		stripe.mu.RLock()
-		for key := range stripe.records {
-			keys = append(keys, key)
-			keyToStripe[key] = i
+		total += len(stripe.records)
+		stripe.mu.RUnlock()
+	}
+
+	out := make([]memRecord, 0, total)
+	for i := range p.stripes {
+		stripe := &p.stripes[i]
+		stripe.mu.RLock()
+		for _, rec := range stripe.records {
+			out = append(out, rec)
 		}
 		stripe.mu.RUnlock()
 	}
-	sort.Strings(keys)
-
-	out := make([]memRecord, 0, len(keys))
-	for _, key := range keys {
-		i := keyToStripe[key]
-		stripe := &p.stripes[i]
-		stripe.mu.RLock()
-		rec := stripe.records[key]
-		stripe.mu.RUnlock()
-		out = append(out, memRecord{
-			op:        rec.op,
-			id:        rec.id,
-			key:       rec.key,
-			embedding: cloneEmbedding(rec.embedding),
-		})
-	}
+	sort.Slice(out, func(i, j int) bool { return out[i].key < out[j].key })
 	return out
 }
 
@@ -455,16 +444,10 @@ func newSealedPartition(id uint64, records []memRecord) *sealedPartition {
 		keys:      make(map[uint64]string),
 	}
 	for _, rec := range records {
-		cp := memRecord{
-			op:        rec.op,
-			id:        rec.id,
-			key:       rec.key,
-			embedding: cloneEmbedding(rec.embedding),
-		}
-		p.records = append(p.records, cp)
-		if cp.op == opUpsert {
-			p.vectors[cp.id] = cloneEmbedding(cp.embedding)
-			p.keys[cp.id] = cp.key
+		p.records = append(p.records, rec)
+		if rec.op == opUpsert {
+			p.vectors[rec.id] = rec.embedding
+			p.keys[rec.id] = rec.key
 		}
 	}
 	return p
@@ -584,16 +567,20 @@ func (w *walWriter) loop(f *os.File) {
 	lastSync := time.Now()
 	syncTicker := time.NewTicker(w.syncEvery)
 	defer syncTicker.Stop()
+	batch := make([]walAppendReq, 0, w.batchMax)
+	payload := make([]byte, 0, 64*1024)
 
 	flushAppendBatch := func(batch []walAppendReq) {
 		if len(batch) == 0 {
 			return
 		}
-		var payload bytes.Buffer
+		payload = payload[:0]
 		var appendErr error
 		for _, req := range batch {
 			for _, rec := range req.records {
-				if err := writeRecord(&payload, rec); err != nil {
+				var err error
+				payload, err = appendEncodedRecord(payload, rec)
+				if err != nil {
 					appendErr = fmt.Errorf("encode wal record: %w", err)
 					break
 				}
@@ -603,13 +590,8 @@ func (w *walWriter) loop(f *os.File) {
 			}
 		}
 
-		if appendErr == nil && payload.Len() > 0 {
-			if _, err := f.Seek(0, io.SeekEnd); err != nil {
-				appendErr = fmt.Errorf("seek wal end: %w", err)
-			}
-		}
-		if appendErr == nil && payload.Len() > 0 {
-			if _, err := f.Write(payload.Bytes()); err != nil {
+		if appendErr == nil && len(payload) > 0 {
+			if _, err := f.Write(payload); err != nil {
 				appendErr = fmt.Errorf("write wal batch: %w", err)
 			}
 		}
@@ -690,7 +672,7 @@ func (w *walWriter) loop(f *os.File) {
 			rotate(rotateReq)
 
 		case appendReq := <-w.appendCh:
-			batch := make([]walAppendReq, 0, w.batchMax)
+			batch = batch[:0]
 			batch = append(batch, appendReq)
 			waitTimer := time.NewTimer(w.batchWait)
 		collect:
@@ -2218,35 +2200,52 @@ func readLogHeader(r io.Reader, expectedMagic [8]byte, expectedVersion uint16) e
 	return nil
 }
 
-func writeRecord(w io.Writer, rec memRecord) error {
-	var payload bytes.Buffer
-	if err := payload.WriteByte(rec.op); err != nil {
-		return err
+func appendEncodedRecord(dst []byte, rec memRecord) ([]byte, error) {
+	switch rec.op {
+	case opUpsert, opDelete:
+	default:
+		return dst, fmt.Errorf("unknown record op %d", rec.op)
 	}
-	if err := binary.Write(&payload, binary.LittleEndian, rec.id); err != nil {
-		return err
+
+	maxUint32 := int(^uint32(0))
+	if len(rec.key) > maxUint32 {
+		return dst, fmt.Errorf("key too long: %d", len(rec.key))
 	}
-	keyBytes := []byte(rec.key)
-	if err := binary.Write(&payload, binary.LittleEndian, uint32(len(keyBytes))); err != nil {
-		return err
-	}
-	if _, err := payload.Write(keyBytes); err != nil {
-		return err
-	}
+
+	payloadLen := 1 + 8 + 4 + len(rec.key)
 	if rec.op == opUpsert {
-		if err := binary.Write(&payload, binary.LittleEndian, uint32(len(rec.embedding))); err != nil {
-			return err
+		if len(rec.embedding) > (maxUint32-payloadLen-4)/4 {
+			return dst, fmt.Errorf("embedding too large: %d", len(rec.embedding))
 		}
+		payloadLen += 4 + len(rec.embedding)*4
+	}
+	if payloadLen > maxUint32 {
+		return dst, fmt.Errorf("record payload too large: %d", payloadLen)
+	}
+
+	start := len(dst)
+	dst = append(dst, 0, 0, 0, 0)
+	dst = append(dst, rec.op)
+	dst = binary.LittleEndian.AppendUint64(dst, rec.id)
+	dst = binary.LittleEndian.AppendUint32(dst, uint32(len(rec.key)))
+	dst = append(dst, rec.key...)
+
+	if rec.op == opUpsert {
+		dst = binary.LittleEndian.AppendUint32(dst, uint32(len(rec.embedding)))
 		for _, v := range rec.embedding {
-			if err := binary.Write(&payload, binary.LittleEndian, math.Float32bits(v)); err != nil {
-				return err
-			}
+			dst = binary.LittleEndian.AppendUint32(dst, math.Float32bits(v))
 		}
 	}
-	if err := binary.Write(w, binary.LittleEndian, uint32(payload.Len())); err != nil {
+	binary.LittleEndian.PutUint32(dst[start:start+4], uint32(payloadLen))
+	return dst, nil
+}
+
+func writeRecord(w io.Writer, rec memRecord) error {
+	payload, err := appendEncodedRecord(nil, rec)
+	if err != nil {
 		return err
 	}
-	_, err := w.Write(payload.Bytes())
+	_, err = w.Write(payload)
 	return err
 }
 

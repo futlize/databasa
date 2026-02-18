@@ -37,19 +37,22 @@ try {
 finally {
     if ($null -eq $prevGOOS -or $prevGOOS -eq "") {
         Remove-Item Env:GOOS -ErrorAction SilentlyContinue
-    } else {
+    }
+    else {
         $env:GOOS = $prevGOOS
     }
 
     if ($null -eq $prevGOARCH -or $prevGOARCH -eq "") {
         Remove-Item Env:GOARCH -ErrorAction SilentlyContinue
-    } else {
+    }
+    else {
         $env:GOARCH = $prevGOARCH
     }
 
     if ($null -eq $prevGOARM -or $prevGOARM -eq "") {
         Remove-Item Env:GOARM -ErrorAction SilentlyContinue
-    } else {
+    }
+    else {
         $env:GOARM = $prevGOARM
     }
 

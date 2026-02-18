@@ -33,6 +33,7 @@ type config struct {
 	dimension           int
 	batchSize           int
 	workers             int
+	rpcMode             string
 	dialTimeout         time.Duration
 	rpcTimeout          time.Duration
 	progressEvery       time.Duration
@@ -74,10 +75,11 @@ func parseFlags() config {
 	flag.BoolVar(&cfg.createIndexOnCreate, "create-index-on-create", true, "create HNSW index right after creating the collection")
 	flag.IntVar(&cfg.indexM, "index-m", 16, "HNSW M (max connections per node)")
 	flag.IntVar(&cfg.indexEfConstruction, "index-ef-construction", 200, "HNSW ef_construction (build-time beam width)")
-	flag.IntVar(&cfg.vectors, "vectors", fixedInsertCount, "DEPRECATED: ignored; insert count is fixed to 200000")
+	flag.IntVar(&cfg.vectors, "vectors", fixedInsertCount, "number of vectors to insert")
 	flag.IntVar(&cfg.dimension, "dimension", 128, "vector dimension")
 	flag.IntVar(&cfg.batchSize, "batch-size", 1000, "vectors per BatchInsert call")
 	flag.IntVar(&cfg.workers, "workers", 1, "number of concurrent workers")
+	flag.StringVar(&cfg.rpcMode, "rpc-mode", "batch", "insert RPC mode: batch|insert")
 	flag.DurationVar(&cfg.dialTimeout, "dial-timeout", 15*time.Second, "timeout for initial gRPC dial")
 	flag.DurationVar(&cfg.rpcTimeout, "rpc-timeout", 30*time.Second, "timeout for each gRPC request")
 	flag.DurationVar(&cfg.progressEvery, "progress-every", 5*time.Second, "progress report interval (0 disables)")
@@ -91,7 +93,6 @@ func parseFlags() config {
 	flag.BoolVar(&cfg.embeddedKeepDataPath, "keep-data", false, "keep embedded data directory after benchmark")
 
 	flag.Parse()
-	cfg.vectors = fixedInsertCount
 	return cfg
 }
 
@@ -110,6 +111,11 @@ func (c config) validate() error {
 	}
 	if c.workers > c.vectors {
 		return errors.New("workers must be <= vectors")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.rpcMode)) {
+	case "batch", "insert":
+	default:
+		return errors.New("rpc-mode must be batch or insert")
 	}
 	if c.progressEvery < 0 {
 		return errors.New("progress-every must be >= 0")
@@ -133,7 +139,7 @@ func (c config) validate() error {
 
 func run(cfg config) error {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	log.Printf("Insert count is fixed to 200000 for safety and fast validation.")
+	log.Printf("configured insert count: %d", cfg.vectors)
 
 	targetAddr := cfg.addr
 	cleanup := func() {}
@@ -353,6 +359,15 @@ func createIndex(ctx context.Context, client pb.DatabasaClient, collection strin
 }
 
 func runInsertBenchmark(client pb.DatabasaClient, cfg config) (uint64, error) {
+	switch strings.ToLower(strings.TrimSpace(cfg.rpcMode)) {
+	case "insert":
+		return runSingleInsertBenchmark(client, cfg)
+	default:
+		return runBatchInsertBenchmark(client, cfg)
+	}
+}
+
+func runBatchInsertBenchmark(client pb.DatabasaClient, cfg config) (uint64, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -431,6 +446,88 @@ sendLoop:
 		case <-ctx.Done():
 			break sendLoop
 		case jobs <- batchJob{start: start, count: count}:
+		}
+	}
+
+	close(jobs)
+	wg.Wait()
+	cancel()
+	<-progressDone
+
+	select {
+	case err := <-errCh:
+		return inserted.Load(), err
+	default:
+	}
+
+	return inserted.Load(), nil
+}
+
+func runSingleInsertBenchmark(client pb.DatabasaClient, cfg config) (uint64, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	jobs := make(chan int, cfg.workers*2)
+	errCh := make(chan error, 1)
+	var inserted atomic.Uint64
+
+	var wg sync.WaitGroup
+	for i := 0; i < cfg.workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for vecID := range jobs {
+				req := &pb.InsertRequest{
+					Collection: cfg.collection,
+					Key:        "bench:" + strconv.Itoa(vecID),
+					Embedding:  buildEmbedding(vecID, cfg.dimension),
+				}
+
+				var lastErr error
+				for attempt := 1; attempt <= maxBatchInsertRetries; attempt++ {
+					callCtx, callCancel := rpcContext(ctx, cfg.rpcTimeout)
+					_, err := client.Insert(callCtx, req)
+					callCancel()
+					if err == nil {
+						inserted.Add(1)
+						lastErr = nil
+						break
+					}
+
+					lastErr = err
+					if !isRetryableBatchError(err) || attempt == maxBatchInsertRetries {
+						break
+					}
+
+					backoff := time.Duration(attempt*50) * time.Millisecond
+					time.Sleep(backoff)
+				}
+
+				if lastErr != nil {
+					select {
+					case errCh <- fmt.Errorf("insert id=%d: %w", vecID, lastErr):
+					default:
+					}
+					cancel()
+					return
+				}
+			}
+		}()
+	}
+
+	progressDone := make(chan struct{})
+	if cfg.progressEvery > 0 {
+		go progressReporter(ctx, progressDone, cfg.progressEvery, cfg.vectors, &inserted)
+	} else {
+		close(progressDone)
+	}
+
+sendLoop:
+	for vecID := 0; vecID < cfg.vectors; vecID++ {
+		select {
+		case <-ctx.Done():
+			break sendLoop
+		case jobs <- vecID:
 		}
 	}
 

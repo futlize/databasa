@@ -181,6 +181,30 @@ func TestVectorStoreInt8Compression(t *testing.T) {
 	}
 }
 
+func TestVectorStoreInsertOwnsCallerEmbedding(t *testing.T) {
+	store, err := Open(t.TempDir(), "docs", 3, "cosine")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	original := []float32{1, 2, 3}
+	expected := normalizedCopy(original)
+	if _, err := store.Insert(context.Background(), "k", original); err != nil {
+		t.Fatalf("insert vector: %v", err)
+	}
+
+	original[0] = 99
+	original[1] = -42
+	original[2] = 7
+
+	got, err := store.GetByKey("k")
+	if err != nil {
+		t.Fatalf("get vector: %v", err)
+	}
+	assertVectorClose(t, got, expected, 1e-6)
+}
+
 func TestVectorStoreCosineSearchUsesDotOnNormalizedVectors(t *testing.T) {
 	store, err := Open(t.TempDir(), "docs", 2, "cosine")
 	if err != nil {
