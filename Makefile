@@ -1,7 +1,7 @@
 SHELL := /bin/sh
 
 APP := databasa
-CMD := ./cmd/databasa-server
+CMD := ./cmd/databasa
 BIN_DIR := ./bin
 BIN := $(BIN_DIR)/$(APP)
 DATA_DIR := ./data

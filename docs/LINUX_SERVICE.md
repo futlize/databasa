@@ -12,7 +12,7 @@ Este guia documenta a instalacao e operacao do Databasa como servico systemd no 
 Comandos exatos:
 
 ```bash
-go build -o ./bin/databasa ./cmd/databasa-server
+go build -o ./bin/databasa ./cmd/databasa
 sudo ./scripts/install.sh
 ```
 

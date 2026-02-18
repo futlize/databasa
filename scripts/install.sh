@@ -61,11 +61,11 @@ if [[ -x "${SOURCE_BIN}" ]]; then
 else
   if ! command -v go >/dev/null 2>&1; then
     echo "Binary not found at ${SOURCE_BIN} and Go toolchain is unavailable." >&2
-    echo "Build it first with: go build -o ./bin/${BIN_NAME} ./cmd/databasa-server" >&2
+    echo "Build it first with: go build -o ./bin/${BIN_NAME} ./cmd/databasa" >&2
     exit 1
   fi
   TMP_BIN="$(mktemp "/tmp/${BIN_NAME}.XXXXXX")"
-  (cd "${REPO_ROOT}" && go build -o "${TMP_BIN}" ./cmd/databasa-server)
+  (cd "${REPO_ROOT}" && go build -o "${TMP_BIN}" ./cmd/databasa)
   BIN_TO_INSTALL="${TMP_BIN}"
 fi
 

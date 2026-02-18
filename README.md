@@ -27,19 +27,19 @@ O projeto existe para oferecer uma base vetorial simples de operar, com foco em:
 ### 1) Rodar localmente
 
 ```bash
-go run ./cmd/databasa-server
+go run ./cmd/databasa
 ```
 
 Com arquivo de configuracao explicito:
 
 ```bash
-go run ./cmd/databasa-server -config ./databasa.toml
+go run ./cmd/databasa -config ./databasa.toml
 ```
 
 ### 2) Build do binario
 
 ```bash
-go build -o ./bin/databasa ./cmd/databasa-server
+go build -o ./bin/databasa ./cmd/databasa
 ./bin/databasa -config ./databasa.toml
 ```
 
@@ -69,13 +69,13 @@ grpcurl -plaintext -d '{"collection":"embeddings","embedding":[0.1,0.2,0.3],"top
 O benchmark de insert agora usa contagem fixa de `200000` vetores.
 
 ```bash
-go run ./cmd/databasa-benchmark -embedded=true -workers 4 -batch-size 1000
+go run ./cmd/benchmark -embedded=true -workers 4 -batch-size 1000
 ```
 
 PowerShell:
 
 ```powershell
-pwsh ./scripts/benchmark-insert-500k.ps1 -Embedded
+pwsh ./scripts/benchmark.ps1 -Embedded
 ```
 
 ## Configuracao minima
@@ -109,7 +109,7 @@ require_rpc_deadline = false
 ## Linux service (basico)
 
 ```bash
-go build -o ./bin/databasa ./cmd/databasa-server
+go build -o ./bin/databasa ./cmd/databasa
 sudo ./scripts/install.sh
 databasa status
 databasa logs --follow
