@@ -50,6 +50,22 @@ go build -o ./bin/databasa ./cmd/databasa
 ./bin/databasa -config ./databasa.toml
 ```
 
+### 2.1) Build de release para Ubuntu (linux/amd64)
+
+PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force -Path .\dist | Out-Null
+$env:CGO_ENABLED="0"; $env:GOOS="linux"; $env:GOARCH="amd64"; go build -trimpath -ldflags "-s -w" -o ./dist/databasa_linux_amd64 ./cmd/databasa
+```
+
+Bash:
+
+```bash
+mkdir -p ./dist
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o ./dist/databasa_linux_amd64 ./cmd/databasa
+```
+
 ### 3) Rodar com Docker
 
 ```bash
@@ -139,6 +155,9 @@ require_rpc_deadline = false
 # Sem Go (usa release precompilada por padrao):
 sudo ./scripts/install.sh
 
+# Opcional: fixar uma tag de release especifica (default = latest)
+# sudo env DATABASA_RELEASE_TAG=v0.1.2 ./scripts/install.sh
+#
 # Opcional: URL explicita do binario/arquivo .tar.gz/.tgz
 # export DATABASA_BIN_URL="https://.../databasa_linux_amd64"
 # sudo ./scripts/install.sh

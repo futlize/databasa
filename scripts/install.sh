@@ -198,9 +198,7 @@ build_binary_with_go() {
   return 0
 }
 
-if [[ -x "${SOURCE_BIN}" ]]; then
-  BIN_TO_INSTALL="${SOURCE_BIN}"
-elif [[ -n "${BIN_URL}" ]]; then
+if [[ -n "${BIN_URL}" ]]; then
   if download_binary_from_url "${BIN_URL}"; then
     echo "Downloaded binary from DATABASA_BIN_URL."
   else
@@ -209,19 +207,28 @@ elif [[ -n "${BIN_URL}" ]]; then
 fi
 
 if [[ -z "${BIN_TO_INSTALL}" ]]; then
-  download_release_binary || true
+  if ! download_release_binary; then
+    echo "Warning: failed to download GitHub release asset from ${RELEASE_REPO} (${RELEASE_TAG})." >&2
+  fi
+fi
+
+if [[ -z "${BIN_TO_INSTALL}" && -x "${SOURCE_BIN}" ]]; then
+  BIN_TO_INSTALL="${SOURCE_BIN}"
+  echo "Using local fallback binary: ${SOURCE_BIN}"
 fi
 
 if [[ -z "${BIN_TO_INSTALL}" ]]; then
-  build_binary_with_go || true
+  if build_binary_with_go; then
+    echo "Built fallback binary with local Go toolchain."
+  fi
 fi
 
 if [[ -z "${BIN_TO_INSTALL}" ]]; then
   echo "Unable to resolve ${BIN_NAME} binary." >&2
   echo "Tried:" >&2
-  echo "  1) Local executable at ${SOURCE_BIN}" >&2
-  echo "  2) DATABASA_BIN_URL (if provided)" >&2
-  echo "  3) GitHub release asset from ${RELEASE_REPO} (${RELEASE_TAG})" >&2
+  echo "  1) DATABASA_BIN_URL (if provided)" >&2
+  echo "  2) GitHub release asset from ${RELEASE_REPO} (${RELEASE_TAG})" >&2
+  echo "  3) Local executable at ${SOURCE_BIN}" >&2
   echo "  4) Local Go toolchain build" >&2
   echo "Provide one of:" >&2
   echo "  - ./bin/${BIN_NAME} executable, or" >&2
