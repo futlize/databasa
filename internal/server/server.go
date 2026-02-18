@@ -1824,6 +1824,10 @@ func dirSizeBytes(root string) (int64, error) {
 	var size int64
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
+			// Ignore transient files that disappear during background compaction/flush.
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		if d.IsDir() {
@@ -1831,6 +1835,9 @@ func dirSizeBytes(root string) (int64, error) {
 		}
 		info, err := d.Info()
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		size += info.Size()
