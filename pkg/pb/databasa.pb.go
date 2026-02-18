@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v5.29.3
-// source: kekdb.proto
+// source: databasa.proto
 
 package pb
 
@@ -54,11 +54,11 @@ func (x Metric) String() string {
 }
 
 func (Metric) Descriptor() protoreflect.EnumDescriptor {
-	return file_kekdb_proto_enumTypes[0].Descriptor()
+	return file_databasa_proto_enumTypes[0].Descriptor()
 }
 
 func (Metric) Type() protoreflect.EnumType {
-	return &file_kekdb_proto_enumTypes[0]
+	return &file_databasa_proto_enumTypes[0]
 }
 
 func (x Metric) Number() protoreflect.EnumNumber {
@@ -67,21 +67,21 @@ func (x Metric) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Metric.Descriptor instead.
 func (Metric) EnumDescriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{0}
+	return file_databasa_proto_rawDescGZIP(), []int{0}
 }
 
 type CreateCollectionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Dimension     uint32                 `protobuf:"varint,2,opt,name=dimension,proto3" json:"dimension,omitempty"`
-	Metric        Metric                 `protobuf:"varint,3,opt,name=metric,proto3,enum=kekdb.Metric" json:"metric,omitempty"`
+	Metric        Metric                 `protobuf:"varint,3,opt,name=metric,proto3,enum=databasa.Metric" json:"metric,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateCollectionRequest) Reset() {
 	*x = CreateCollectionRequest{}
-	mi := &file_kekdb_proto_msgTypes[0]
+	mi := &file_databasa_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -93,7 +93,7 @@ func (x *CreateCollectionRequest) String() string {
 func (*CreateCollectionRequest) ProtoMessage() {}
 
 func (x *CreateCollectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[0]
+	mi := &file_databasa_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -106,7 +106,7 @@ func (x *CreateCollectionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateCollectionRequest.ProtoReflect.Descriptor instead.
 func (*CreateCollectionRequest) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{0}
+	return file_databasa_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *CreateCollectionRequest) GetName() string {
@@ -138,7 +138,7 @@ type CreateCollectionResponse struct {
 
 func (x *CreateCollectionResponse) Reset() {
 	*x = CreateCollectionResponse{}
-	mi := &file_kekdb_proto_msgTypes[1]
+	mi := &file_databasa_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -150,7 +150,7 @@ func (x *CreateCollectionResponse) String() string {
 func (*CreateCollectionResponse) ProtoMessage() {}
 
 func (x *CreateCollectionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[1]
+	mi := &file_databasa_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -163,7 +163,7 @@ func (x *CreateCollectionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateCollectionResponse.ProtoReflect.Descriptor instead.
 func (*CreateCollectionResponse) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{1}
+	return file_databasa_proto_rawDescGZIP(), []int{1}
 }
 
 type DeleteCollectionRequest struct {
@@ -175,7 +175,7 @@ type DeleteCollectionRequest struct {
 
 func (x *DeleteCollectionRequest) Reset() {
 	*x = DeleteCollectionRequest{}
-	mi := &file_kekdb_proto_msgTypes[2]
+	mi := &file_databasa_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -187,7 +187,7 @@ func (x *DeleteCollectionRequest) String() string {
 func (*DeleteCollectionRequest) ProtoMessage() {}
 
 func (x *DeleteCollectionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[2]
+	mi := &file_databasa_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -200,7 +200,7 @@ func (x *DeleteCollectionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteCollectionRequest.ProtoReflect.Descriptor instead.
 func (*DeleteCollectionRequest) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{2}
+	return file_databasa_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *DeleteCollectionRequest) GetName() string {
@@ -218,7 +218,7 @@ type DeleteCollectionResponse struct {
 
 func (x *DeleteCollectionResponse) Reset() {
 	*x = DeleteCollectionResponse{}
-	mi := &file_kekdb_proto_msgTypes[3]
+	mi := &file_databasa_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -230,7 +230,7 @@ func (x *DeleteCollectionResponse) String() string {
 func (*DeleteCollectionResponse) ProtoMessage() {}
 
 func (x *DeleteCollectionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[3]
+	mi := &file_databasa_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -243,14 +243,14 @@ func (x *DeleteCollectionResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteCollectionResponse.ProtoReflect.Descriptor instead.
 func (*DeleteCollectionResponse) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{3}
+	return file_databasa_proto_rawDescGZIP(), []int{3}
 }
 
 type CollectionInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Dimension     uint32                 `protobuf:"varint,2,opt,name=dimension,proto3" json:"dimension,omitempty"`
-	Metric        Metric                 `protobuf:"varint,3,opt,name=metric,proto3,enum=kekdb.Metric" json:"metric,omitempty"`
+	Metric        Metric                 `protobuf:"varint,3,opt,name=metric,proto3,enum=databasa.Metric" json:"metric,omitempty"`
 	Count         uint64                 `protobuf:"varint,4,opt,name=count,proto3" json:"count,omitempty"`
 	HasIndex      bool                   `protobuf:"varint,5,opt,name=has_index,json=hasIndex,proto3" json:"has_index,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -259,7 +259,7 @@ type CollectionInfo struct {
 
 func (x *CollectionInfo) Reset() {
 	*x = CollectionInfo{}
-	mi := &file_kekdb_proto_msgTypes[4]
+	mi := &file_databasa_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -271,7 +271,7 @@ func (x *CollectionInfo) String() string {
 func (*CollectionInfo) ProtoMessage() {}
 
 func (x *CollectionInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[4]
+	mi := &file_databasa_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -284,7 +284,7 @@ func (x *CollectionInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CollectionInfo.ProtoReflect.Descriptor instead.
 func (*CollectionInfo) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{4}
+	return file_databasa_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CollectionInfo) GetName() string {
@@ -330,7 +330,7 @@ type ListCollectionsRequest struct {
 
 func (x *ListCollectionsRequest) Reset() {
 	*x = ListCollectionsRequest{}
-	mi := &file_kekdb_proto_msgTypes[5]
+	mi := &file_databasa_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -342,7 +342,7 @@ func (x *ListCollectionsRequest) String() string {
 func (*ListCollectionsRequest) ProtoMessage() {}
 
 func (x *ListCollectionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[5]
+	mi := &file_databasa_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -355,7 +355,7 @@ func (x *ListCollectionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCollectionsRequest.ProtoReflect.Descriptor instead.
 func (*ListCollectionsRequest) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{5}
+	return file_databasa_proto_rawDescGZIP(), []int{5}
 }
 
 type ListCollectionsResponse struct {
@@ -367,7 +367,7 @@ type ListCollectionsResponse struct {
 
 func (x *ListCollectionsResponse) Reset() {
 	*x = ListCollectionsResponse{}
-	mi := &file_kekdb_proto_msgTypes[6]
+	mi := &file_databasa_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -379,7 +379,7 @@ func (x *ListCollectionsResponse) String() string {
 func (*ListCollectionsResponse) ProtoMessage() {}
 
 func (x *ListCollectionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[6]
+	mi := &file_databasa_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -392,7 +392,7 @@ func (x *ListCollectionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCollectionsResponse.ProtoReflect.Descriptor instead.
 func (*ListCollectionsResponse) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{6}
+	return file_databasa_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ListCollectionsResponse) GetCollections() []*CollectionInfo {
@@ -413,7 +413,7 @@ type CreateIndexRequest struct {
 
 func (x *CreateIndexRequest) Reset() {
 	*x = CreateIndexRequest{}
-	mi := &file_kekdb_proto_msgTypes[7]
+	mi := &file_databasa_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -425,7 +425,7 @@ func (x *CreateIndexRequest) String() string {
 func (*CreateIndexRequest) ProtoMessage() {}
 
 func (x *CreateIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[7]
+	mi := &file_databasa_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -438,7 +438,7 @@ func (x *CreateIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateIndexRequest.ProtoReflect.Descriptor instead.
 func (*CreateIndexRequest) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{7}
+	return file_databasa_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CreateIndexRequest) GetCollection() string {
@@ -470,7 +470,7 @@ type CreateIndexResponse struct {
 
 func (x *CreateIndexResponse) Reset() {
 	*x = CreateIndexResponse{}
-	mi := &file_kekdb_proto_msgTypes[8]
+	mi := &file_databasa_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -482,7 +482,7 @@ func (x *CreateIndexResponse) String() string {
 func (*CreateIndexResponse) ProtoMessage() {}
 
 func (x *CreateIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[8]
+	mi := &file_databasa_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -495,7 +495,7 @@ func (x *CreateIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateIndexResponse.ProtoReflect.Descriptor instead.
 func (*CreateIndexResponse) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{8}
+	return file_databasa_proto_rawDescGZIP(), []int{8}
 }
 
 type DropIndexRequest struct {
@@ -507,7 +507,7 @@ type DropIndexRequest struct {
 
 func (x *DropIndexRequest) Reset() {
 	*x = DropIndexRequest{}
-	mi := &file_kekdb_proto_msgTypes[9]
+	mi := &file_databasa_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -519,7 +519,7 @@ func (x *DropIndexRequest) String() string {
 func (*DropIndexRequest) ProtoMessage() {}
 
 func (x *DropIndexRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[9]
+	mi := &file_databasa_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -532,7 +532,7 @@ func (x *DropIndexRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DropIndexRequest.ProtoReflect.Descriptor instead.
 func (*DropIndexRequest) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{9}
+	return file_databasa_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *DropIndexRequest) GetCollection() string {
@@ -550,7 +550,7 @@ type DropIndexResponse struct {
 
 func (x *DropIndexResponse) Reset() {
 	*x = DropIndexResponse{}
-	mi := &file_kekdb_proto_msgTypes[10]
+	mi := &file_databasa_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -562,7 +562,7 @@ func (x *DropIndexResponse) String() string {
 func (*DropIndexResponse) ProtoMessage() {}
 
 func (x *DropIndexResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[10]
+	mi := &file_databasa_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -575,7 +575,7 @@ func (x *DropIndexResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DropIndexResponse.ProtoReflect.Descriptor instead.
 func (*DropIndexResponse) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{10}
+	return file_databasa_proto_rawDescGZIP(), []int{10}
 }
 
 type InsertRequest struct {
@@ -589,7 +589,7 @@ type InsertRequest struct {
 
 func (x *InsertRequest) Reset() {
 	*x = InsertRequest{}
-	mi := &file_kekdb_proto_msgTypes[11]
+	mi := &file_databasa_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -601,7 +601,7 @@ func (x *InsertRequest) String() string {
 func (*InsertRequest) ProtoMessage() {}
 
 func (x *InsertRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[11]
+	mi := &file_databasa_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -614,7 +614,7 @@ func (x *InsertRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InsertRequest.ProtoReflect.Descriptor instead.
 func (*InsertRequest) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{11}
+	return file_databasa_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *InsertRequest) GetCollection() string {
@@ -646,7 +646,7 @@ type InsertResponse struct {
 
 func (x *InsertResponse) Reset() {
 	*x = InsertResponse{}
-	mi := &file_kekdb_proto_msgTypes[12]
+	mi := &file_databasa_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -658,7 +658,7 @@ func (x *InsertResponse) String() string {
 func (*InsertResponse) ProtoMessage() {}
 
 func (x *InsertResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[12]
+	mi := &file_databasa_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -671,7 +671,7 @@ func (x *InsertResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InsertResponse.ProtoReflect.Descriptor instead.
 func (*InsertResponse) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{12}
+	return file_databasa_proto_rawDescGZIP(), []int{12}
 }
 
 type GetRequest struct {
@@ -684,7 +684,7 @@ type GetRequest struct {
 
 func (x *GetRequest) Reset() {
 	*x = GetRequest{}
-	mi := &file_kekdb_proto_msgTypes[13]
+	mi := &file_databasa_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -696,7 +696,7 @@ func (x *GetRequest) String() string {
 func (*GetRequest) ProtoMessage() {}
 
 func (x *GetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[13]
+	mi := &file_databasa_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -709,7 +709,7 @@ func (x *GetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRequest.ProtoReflect.Descriptor instead.
 func (*GetRequest) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{13}
+	return file_databasa_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetRequest) GetCollection() string {
@@ -736,7 +736,7 @@ type GetResponse struct {
 
 func (x *GetResponse) Reset() {
 	*x = GetResponse{}
-	mi := &file_kekdb_proto_msgTypes[14]
+	mi := &file_databasa_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -748,7 +748,7 @@ func (x *GetResponse) String() string {
 func (*GetResponse) ProtoMessage() {}
 
 func (x *GetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[14]
+	mi := &file_databasa_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -761,7 +761,7 @@ func (x *GetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetResponse.ProtoReflect.Descriptor instead.
 func (*GetResponse) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{14}
+	return file_databasa_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *GetResponse) GetKey() string {
@@ -788,7 +788,7 @@ type DeleteRequest struct {
 
 func (x *DeleteRequest) Reset() {
 	*x = DeleteRequest{}
-	mi := &file_kekdb_proto_msgTypes[15]
+	mi := &file_databasa_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -800,7 +800,7 @@ func (x *DeleteRequest) String() string {
 func (*DeleteRequest) ProtoMessage() {}
 
 func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[15]
+	mi := &file_databasa_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -813,7 +813,7 @@ func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRequest.ProtoReflect.Descriptor instead.
 func (*DeleteRequest) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{15}
+	return file_databasa_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *DeleteRequest) GetCollection() string {
@@ -838,7 +838,7 @@ type DeleteResponse struct {
 
 func (x *DeleteResponse) Reset() {
 	*x = DeleteResponse{}
-	mi := &file_kekdb_proto_msgTypes[16]
+	mi := &file_databasa_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -850,7 +850,7 @@ func (x *DeleteResponse) String() string {
 func (*DeleteResponse) ProtoMessage() {}
 
 func (x *DeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[16]
+	mi := &file_databasa_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -863,22 +863,23 @@ func (x *DeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteResponse.ProtoReflect.Descriptor instead.
 func (*DeleteResponse) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{16}
+	return file_databasa_proto_rawDescGZIP(), []int{16}
 }
 
 type SearchRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Collection    string                 `protobuf:"bytes,1,opt,name=collection,proto3" json:"collection,omitempty"`
-	Embedding     []float32              `protobuf:"fixed32,2,rep,packed,name=embedding,proto3" json:"embedding,omitempty"`
-	TopK          uint32                 `protobuf:"varint,3,opt,name=top_k,json=topK,proto3" json:"top_k,omitempty"`
-	EfSearch      uint32                 `protobuf:"varint,4,opt,name=ef_search,json=efSearch,proto3" json:"ef_search,omitempty"` // search beam width (default 50, 0 = use default)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Collection       string                 `protobuf:"bytes,1,opt,name=collection,proto3" json:"collection,omitempty"`
+	Embedding        []float32              `protobuf:"fixed32,2,rep,packed,name=embedding,proto3" json:"embedding,omitempty"`
+	TopK             uint32                 `protobuf:"varint,3,opt,name=top_k,json=topK,proto3" json:"top_k,omitempty"`
+	EfSearch         uint32                 `protobuf:"varint,4,opt,name=ef_search,json=efSearch,proto3" json:"ef_search,omitempty"`                         // search beam width (default 50, 0 = use default)
+	IncludeEmbedding bool                   `protobuf:"varint,5,opt,name=include_embedding,json=includeEmbedding,proto3" json:"include_embedding,omitempty"` // when true, SearchResult may include full embedding payload
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *SearchRequest) Reset() {
 	*x = SearchRequest{}
-	mi := &file_kekdb_proto_msgTypes[17]
+	mi := &file_databasa_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -890,7 +891,7 @@ func (x *SearchRequest) String() string {
 func (*SearchRequest) ProtoMessage() {}
 
 func (x *SearchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[17]
+	mi := &file_databasa_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -903,7 +904,7 @@ func (x *SearchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchRequest.ProtoReflect.Descriptor instead.
 func (*SearchRequest) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{17}
+	return file_databasa_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *SearchRequest) GetCollection() string {
@@ -934,17 +935,25 @@ func (x *SearchRequest) GetEfSearch() uint32 {
 	return 0
 }
 
+func (x *SearchRequest) GetIncludeEmbedding() bool {
+	if x != nil {
+		return x.IncludeEmbedding
+	}
+	return false
+}
+
 type SearchResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Score         float32                `protobuf:"fixed32,2,opt,name=score,proto3" json:"score,omitempty"` // distance (lower = more similar for L2/cosine)
+	Score         float32                `protobuf:"fixed32,2,opt,name=score,proto3" json:"score,omitempty"`                // distance (lower = more similar for L2/cosine)
+	Embedding     []float32              `protobuf:"fixed32,3,rep,packed,name=embedding,proto3" json:"embedding,omitempty"` // optional payload; filled when requested
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SearchResult) Reset() {
 	*x = SearchResult{}
-	mi := &file_kekdb_proto_msgTypes[18]
+	mi := &file_databasa_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -956,7 +965,7 @@ func (x *SearchResult) String() string {
 func (*SearchResult) ProtoMessage() {}
 
 func (x *SearchResult) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[18]
+	mi := &file_databasa_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -969,7 +978,7 @@ func (x *SearchResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchResult.ProtoReflect.Descriptor instead.
 func (*SearchResult) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{18}
+	return file_databasa_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *SearchResult) GetKey() string {
@@ -986,6 +995,13 @@ func (x *SearchResult) GetScore() float32 {
 	return 0
 }
 
+func (x *SearchResult) GetEmbedding() []float32 {
+	if x != nil {
+		return x.Embedding
+	}
+	return nil
+}
+
 type SearchResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Results       []*SearchResult        `protobuf:"bytes,1,rep,name=results,proto3" json:"results,omitempty"`
@@ -995,7 +1011,7 @@ type SearchResponse struct {
 
 func (x *SearchResponse) Reset() {
 	*x = SearchResponse{}
-	mi := &file_kekdb_proto_msgTypes[19]
+	mi := &file_databasa_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1007,7 +1023,7 @@ func (x *SearchResponse) String() string {
 func (*SearchResponse) ProtoMessage() {}
 
 func (x *SearchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[19]
+	mi := &file_databasa_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1020,7 +1036,7 @@ func (x *SearchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchResponse.ProtoReflect.Descriptor instead.
 func (*SearchResponse) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{19}
+	return file_databasa_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *SearchResponse) GetResults() []*SearchResult {
@@ -1040,7 +1056,7 @@ type BatchInsertItem struct {
 
 func (x *BatchInsertItem) Reset() {
 	*x = BatchInsertItem{}
-	mi := &file_kekdb_proto_msgTypes[20]
+	mi := &file_databasa_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1052,7 +1068,7 @@ func (x *BatchInsertItem) String() string {
 func (*BatchInsertItem) ProtoMessage() {}
 
 func (x *BatchInsertItem) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[20]
+	mi := &file_databasa_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1065,7 +1081,7 @@ func (x *BatchInsertItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchInsertItem.ProtoReflect.Descriptor instead.
 func (*BatchInsertItem) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{20}
+	return file_databasa_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *BatchInsertItem) GetKey() string {
@@ -1092,7 +1108,7 @@ type BatchInsertRequest struct {
 
 func (x *BatchInsertRequest) Reset() {
 	*x = BatchInsertRequest{}
-	mi := &file_kekdb_proto_msgTypes[21]
+	mi := &file_databasa_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1104,7 +1120,7 @@ func (x *BatchInsertRequest) String() string {
 func (*BatchInsertRequest) ProtoMessage() {}
 
 func (x *BatchInsertRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[21]
+	mi := &file_databasa_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1117,7 +1133,7 @@ func (x *BatchInsertRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchInsertRequest.ProtoReflect.Descriptor instead.
 func (*BatchInsertRequest) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{21}
+	return file_databasa_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *BatchInsertRequest) GetCollection() string {
@@ -1143,7 +1159,7 @@ type BatchInsertResponse struct {
 
 func (x *BatchInsertResponse) Reset() {
 	*x = BatchInsertResponse{}
-	mi := &file_kekdb_proto_msgTypes[22]
+	mi := &file_databasa_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1155,7 +1171,7 @@ func (x *BatchInsertResponse) String() string {
 func (*BatchInsertResponse) ProtoMessage() {}
 
 func (x *BatchInsertResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_kekdb_proto_msgTypes[22]
+	mi := &file_databasa_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1168,7 +1184,7 @@ func (x *BatchInsertResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchInsertResponse.ProtoReflect.Descriptor instead.
 func (*BatchInsertResponse) Descriptor() ([]byte, []int) {
-	return file_kekdb_proto_rawDescGZIP(), []int{22}
+	return file_databasa_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *BatchInsertResponse) GetInserted() uint64 {
@@ -1178,28 +1194,28 @@ func (x *BatchInsertResponse) GetInserted() uint64 {
 	return 0
 }
 
-var File_kekdb_proto protoreflect.FileDescriptor
+var File_databasa_proto protoreflect.FileDescriptor
 
-const file_kekdb_proto_rawDesc = "" +
+const file_databasa_proto_rawDesc = "" +
 	"\n" +
-	"\vkekdb.proto\x12\x05kekdb\"r\n" +
+	"\x0edatabasa.proto\x12\bdatabasa\"u\n" +
 	"\x17CreateCollectionRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
-	"\tdimension\x18\x02 \x01(\rR\tdimension\x12%\n" +
-	"\x06metric\x18\x03 \x01(\x0e2\r.kekdb.MetricR\x06metric\"\x1a\n" +
+	"\tdimension\x18\x02 \x01(\rR\tdimension\x12(\n" +
+	"\x06metric\x18\x03 \x01(\x0e2\x10.databasa.MetricR\x06metric\"\x1a\n" +
 	"\x18CreateCollectionResponse\"-\n" +
 	"\x17DeleteCollectionRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"\x1a\n" +
-	"\x18DeleteCollectionResponse\"\x9c\x01\n" +
+	"\x18DeleteCollectionResponse\"\x9f\x01\n" +
 	"\x0eCollectionInfo\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
-	"\tdimension\x18\x02 \x01(\rR\tdimension\x12%\n" +
-	"\x06metric\x18\x03 \x01(\x0e2\r.kekdb.MetricR\x06metric\x12\x14\n" +
+	"\tdimension\x18\x02 \x01(\rR\tdimension\x12(\n" +
+	"\x06metric\x18\x03 \x01(\x0e2\x10.databasa.MetricR\x06metric\x12\x14\n" +
 	"\x05count\x18\x04 \x01(\x04R\x05count\x12\x1b\n" +
 	"\thas_index\x18\x05 \x01(\bR\bhasIndex\"\x18\n" +
-	"\x16ListCollectionsRequest\"R\n" +
-	"\x17ListCollectionsResponse\x127\n" +
-	"\vcollections\x18\x01 \x03(\v2\x15.kekdb.CollectionInfoR\vcollections\"k\n" +
+	"\x16ListCollectionsRequest\"U\n" +
+	"\x17ListCollectionsResponse\x12:\n" +
+	"\vcollections\x18\x01 \x03(\v2\x18.databasa.CollectionInfoR\vcollections\"k\n" +
 	"\x12CreateIndexRequest\x12\x1e\n" +
 	"\n" +
 	"collection\x18\x01 \x01(\tR\n" +
@@ -1233,112 +1249,114 @@ const file_kekdb_proto_rawDesc = "" +
 	"collection\x18\x01 \x01(\tR\n" +
 	"collection\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\"\x10\n" +
-	"\x0eDeleteResponse\"\x7f\n" +
+	"\x0eDeleteResponse\"\xac\x01\n" +
 	"\rSearchRequest\x12\x1e\n" +
 	"\n" +
 	"collection\x18\x01 \x01(\tR\n" +
 	"collection\x12\x1c\n" +
 	"\tembedding\x18\x02 \x03(\x02R\tembedding\x12\x13\n" +
 	"\x05top_k\x18\x03 \x01(\rR\x04topK\x12\x1b\n" +
-	"\tef_search\x18\x04 \x01(\rR\befSearch\"6\n" +
+	"\tef_search\x18\x04 \x01(\rR\befSearch\x12+\n" +
+	"\x11include_embedding\x18\x05 \x01(\bR\x10includeEmbedding\"T\n" +
 	"\fSearchResult\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05score\x18\x02 \x01(\x02R\x05score\"?\n" +
-	"\x0eSearchResponse\x12-\n" +
-	"\aresults\x18\x01 \x03(\v2\x13.kekdb.SearchResultR\aresults\"A\n" +
+	"\x05score\x18\x02 \x01(\x02R\x05score\x12\x1c\n" +
+	"\tembedding\x18\x03 \x03(\x02R\tembedding\"B\n" +
+	"\x0eSearchResponse\x120\n" +
+	"\aresults\x18\x01 \x03(\v2\x16.databasa.SearchResultR\aresults\"A\n" +
 	"\x0fBatchInsertItem\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x1c\n" +
-	"\tembedding\x18\x02 \x03(\x02R\tembedding\"b\n" +
+	"\tembedding\x18\x02 \x03(\x02R\tembedding\"e\n" +
 	"\x12BatchInsertRequest\x12\x1e\n" +
 	"\n" +
 	"collection\x18\x01 \x01(\tR\n" +
-	"collection\x12,\n" +
-	"\x05items\x18\x02 \x03(\v2\x16.kekdb.BatchInsertItemR\x05items\"1\n" +
+	"collection\x12/\n" +
+	"\x05items\x18\x02 \x03(\v2\x19.databasa.BatchInsertItemR\x05items\"1\n" +
 	"\x13BatchInsertResponse\x12\x1a\n" +
 	"\binserted\x18\x01 \x01(\x04R\binserted*-\n" +
 	"\x06Metric\x12\n" +
 	"\n" +
 	"\x06COSINE\x10\x00\x12\x06\n" +
 	"\x02L2\x10\x01\x12\x0f\n" +
-	"\vDOT_PRODUCT\x10\x022\xa2\x05\n" +
-	"\x05KekDB\x12S\n" +
-	"\x10CreateCollection\x12\x1e.kekdb.CreateCollectionRequest\x1a\x1f.kekdb.CreateCollectionResponse\x12S\n" +
-	"\x10DeleteCollection\x12\x1e.kekdb.DeleteCollectionRequest\x1a\x1f.kekdb.DeleteCollectionResponse\x12P\n" +
-	"\x0fListCollections\x12\x1d.kekdb.ListCollectionsRequest\x1a\x1e.kekdb.ListCollectionsResponse\x12D\n" +
-	"\vCreateIndex\x12\x19.kekdb.CreateIndexRequest\x1a\x1a.kekdb.CreateIndexResponse\x12>\n" +
-	"\tDropIndex\x12\x17.kekdb.DropIndexRequest\x1a\x18.kekdb.DropIndexResponse\x125\n" +
-	"\x06Insert\x12\x14.kekdb.InsertRequest\x1a\x15.kekdb.InsertResponse\x12,\n" +
-	"\x03Get\x12\x11.kekdb.GetRequest\x1a\x12.kekdb.GetResponse\x125\n" +
-	"\x06Delete\x12\x14.kekdb.DeleteRequest\x1a\x15.kekdb.DeleteResponse\x12D\n" +
-	"\vBatchInsert\x12\x19.kekdb.BatchInsertRequest\x1a\x1a.kekdb.BatchInsertResponse\x125\n" +
-	"\x06Search\x12\x14.kekdb.SearchRequest\x1a\x15.kekdb.SearchResponseB\"Z github.com/juniodev/kekdb/pkg/pbb\x06proto3"
+	"\vDOT_PRODUCT\x10\x022\xe1\x05\n" +
+	"\bDatabasa\x12Y\n" +
+	"\x10CreateCollection\x12!.databasa.CreateCollectionRequest\x1a\".databasa.CreateCollectionResponse\x12Y\n" +
+	"\x10DeleteCollection\x12!.databasa.DeleteCollectionRequest\x1a\".databasa.DeleteCollectionResponse\x12V\n" +
+	"\x0fListCollections\x12 .databasa.ListCollectionsRequest\x1a!.databasa.ListCollectionsResponse\x12J\n" +
+	"\vCreateIndex\x12\x1c.databasa.CreateIndexRequest\x1a\x1d.databasa.CreateIndexResponse\x12D\n" +
+	"\tDropIndex\x12\x1a.databasa.DropIndexRequest\x1a\x1b.databasa.DropIndexResponse\x12;\n" +
+	"\x06Insert\x12\x17.databasa.InsertRequest\x1a\x18.databasa.InsertResponse\x122\n" +
+	"\x03Get\x12\x14.databasa.GetRequest\x1a\x15.databasa.GetResponse\x12;\n" +
+	"\x06Delete\x12\x17.databasa.DeleteRequest\x1a\x18.databasa.DeleteResponse\x12J\n" +
+	"\vBatchInsert\x12\x1c.databasa.BatchInsertRequest\x1a\x1d.databasa.BatchInsertResponse\x12;\n" +
+	"\x06Search\x12\x17.databasa.SearchRequest\x1a\x18.databasa.SearchResponseB$Z\"github.com/futlize/databasa/pkg/pbb\x06proto3"
 
 var (
-	file_kekdb_proto_rawDescOnce sync.Once
-	file_kekdb_proto_rawDescData []byte
+	file_databasa_proto_rawDescOnce sync.Once
+	file_databasa_proto_rawDescData []byte
 )
 
-func file_kekdb_proto_rawDescGZIP() []byte {
-	file_kekdb_proto_rawDescOnce.Do(func() {
-		file_kekdb_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_kekdb_proto_rawDesc), len(file_kekdb_proto_rawDesc)))
+func file_databasa_proto_rawDescGZIP() []byte {
+	file_databasa_proto_rawDescOnce.Do(func() {
+		file_databasa_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_databasa_proto_rawDesc), len(file_databasa_proto_rawDesc)))
 	})
-	return file_kekdb_proto_rawDescData
+	return file_databasa_proto_rawDescData
 }
 
-var file_kekdb_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_kekdb_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
-var file_kekdb_proto_goTypes = []any{
-	(Metric)(0),                      // 0: kekdb.Metric
-	(*CreateCollectionRequest)(nil),  // 1: kekdb.CreateCollectionRequest
-	(*CreateCollectionResponse)(nil), // 2: kekdb.CreateCollectionResponse
-	(*DeleteCollectionRequest)(nil),  // 3: kekdb.DeleteCollectionRequest
-	(*DeleteCollectionResponse)(nil), // 4: kekdb.DeleteCollectionResponse
-	(*CollectionInfo)(nil),           // 5: kekdb.CollectionInfo
-	(*ListCollectionsRequest)(nil),   // 6: kekdb.ListCollectionsRequest
-	(*ListCollectionsResponse)(nil),  // 7: kekdb.ListCollectionsResponse
-	(*CreateIndexRequest)(nil),       // 8: kekdb.CreateIndexRequest
-	(*CreateIndexResponse)(nil),      // 9: kekdb.CreateIndexResponse
-	(*DropIndexRequest)(nil),         // 10: kekdb.DropIndexRequest
-	(*DropIndexResponse)(nil),        // 11: kekdb.DropIndexResponse
-	(*InsertRequest)(nil),            // 12: kekdb.InsertRequest
-	(*InsertResponse)(nil),           // 13: kekdb.InsertResponse
-	(*GetRequest)(nil),               // 14: kekdb.GetRequest
-	(*GetResponse)(nil),              // 15: kekdb.GetResponse
-	(*DeleteRequest)(nil),            // 16: kekdb.DeleteRequest
-	(*DeleteResponse)(nil),           // 17: kekdb.DeleteResponse
-	(*SearchRequest)(nil),            // 18: kekdb.SearchRequest
-	(*SearchResult)(nil),             // 19: kekdb.SearchResult
-	(*SearchResponse)(nil),           // 20: kekdb.SearchResponse
-	(*BatchInsertItem)(nil),          // 21: kekdb.BatchInsertItem
-	(*BatchInsertRequest)(nil),       // 22: kekdb.BatchInsertRequest
-	(*BatchInsertResponse)(nil),      // 23: kekdb.BatchInsertResponse
+var file_databasa_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_databasa_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_databasa_proto_goTypes = []any{
+	(Metric)(0),                      // 0: databasa.Metric
+	(*CreateCollectionRequest)(nil),  // 1: databasa.CreateCollectionRequest
+	(*CreateCollectionResponse)(nil), // 2: databasa.CreateCollectionResponse
+	(*DeleteCollectionRequest)(nil),  // 3: databasa.DeleteCollectionRequest
+	(*DeleteCollectionResponse)(nil), // 4: databasa.DeleteCollectionResponse
+	(*CollectionInfo)(nil),           // 5: databasa.CollectionInfo
+	(*ListCollectionsRequest)(nil),   // 6: databasa.ListCollectionsRequest
+	(*ListCollectionsResponse)(nil),  // 7: databasa.ListCollectionsResponse
+	(*CreateIndexRequest)(nil),       // 8: databasa.CreateIndexRequest
+	(*CreateIndexResponse)(nil),      // 9: databasa.CreateIndexResponse
+	(*DropIndexRequest)(nil),         // 10: databasa.DropIndexRequest
+	(*DropIndexResponse)(nil),        // 11: databasa.DropIndexResponse
+	(*InsertRequest)(nil),            // 12: databasa.InsertRequest
+	(*InsertResponse)(nil),           // 13: databasa.InsertResponse
+	(*GetRequest)(nil),               // 14: databasa.GetRequest
+	(*GetResponse)(nil),              // 15: databasa.GetResponse
+	(*DeleteRequest)(nil),            // 16: databasa.DeleteRequest
+	(*DeleteResponse)(nil),           // 17: databasa.DeleteResponse
+	(*SearchRequest)(nil),            // 18: databasa.SearchRequest
+	(*SearchResult)(nil),             // 19: databasa.SearchResult
+	(*SearchResponse)(nil),           // 20: databasa.SearchResponse
+	(*BatchInsertItem)(nil),          // 21: databasa.BatchInsertItem
+	(*BatchInsertRequest)(nil),       // 22: databasa.BatchInsertRequest
+	(*BatchInsertResponse)(nil),      // 23: databasa.BatchInsertResponse
 }
-var file_kekdb_proto_depIdxs = []int32{
-	0,  // 0: kekdb.CreateCollectionRequest.metric:type_name -> kekdb.Metric
-	0,  // 1: kekdb.CollectionInfo.metric:type_name -> kekdb.Metric
-	5,  // 2: kekdb.ListCollectionsResponse.collections:type_name -> kekdb.CollectionInfo
-	19, // 3: kekdb.SearchResponse.results:type_name -> kekdb.SearchResult
-	21, // 4: kekdb.BatchInsertRequest.items:type_name -> kekdb.BatchInsertItem
-	1,  // 5: kekdb.KekDB.CreateCollection:input_type -> kekdb.CreateCollectionRequest
-	3,  // 6: kekdb.KekDB.DeleteCollection:input_type -> kekdb.DeleteCollectionRequest
-	6,  // 7: kekdb.KekDB.ListCollections:input_type -> kekdb.ListCollectionsRequest
-	8,  // 8: kekdb.KekDB.CreateIndex:input_type -> kekdb.CreateIndexRequest
-	10, // 9: kekdb.KekDB.DropIndex:input_type -> kekdb.DropIndexRequest
-	12, // 10: kekdb.KekDB.Insert:input_type -> kekdb.InsertRequest
-	14, // 11: kekdb.KekDB.Get:input_type -> kekdb.GetRequest
-	16, // 12: kekdb.KekDB.Delete:input_type -> kekdb.DeleteRequest
-	22, // 13: kekdb.KekDB.BatchInsert:input_type -> kekdb.BatchInsertRequest
-	18, // 14: kekdb.KekDB.Search:input_type -> kekdb.SearchRequest
-	2,  // 15: kekdb.KekDB.CreateCollection:output_type -> kekdb.CreateCollectionResponse
-	4,  // 16: kekdb.KekDB.DeleteCollection:output_type -> kekdb.DeleteCollectionResponse
-	7,  // 17: kekdb.KekDB.ListCollections:output_type -> kekdb.ListCollectionsResponse
-	9,  // 18: kekdb.KekDB.CreateIndex:output_type -> kekdb.CreateIndexResponse
-	11, // 19: kekdb.KekDB.DropIndex:output_type -> kekdb.DropIndexResponse
-	13, // 20: kekdb.KekDB.Insert:output_type -> kekdb.InsertResponse
-	15, // 21: kekdb.KekDB.Get:output_type -> kekdb.GetResponse
-	17, // 22: kekdb.KekDB.Delete:output_type -> kekdb.DeleteResponse
-	23, // 23: kekdb.KekDB.BatchInsert:output_type -> kekdb.BatchInsertResponse
-	20, // 24: kekdb.KekDB.Search:output_type -> kekdb.SearchResponse
+var file_databasa_proto_depIdxs = []int32{
+	0,  // 0: databasa.CreateCollectionRequest.metric:type_name -> databasa.Metric
+	0,  // 1: databasa.CollectionInfo.metric:type_name -> databasa.Metric
+	5,  // 2: databasa.ListCollectionsResponse.collections:type_name -> databasa.CollectionInfo
+	19, // 3: databasa.SearchResponse.results:type_name -> databasa.SearchResult
+	21, // 4: databasa.BatchInsertRequest.items:type_name -> databasa.BatchInsertItem
+	1,  // 5: databasa.Databasa.CreateCollection:input_type -> databasa.CreateCollectionRequest
+	3,  // 6: databasa.Databasa.DeleteCollection:input_type -> databasa.DeleteCollectionRequest
+	6,  // 7: databasa.Databasa.ListCollections:input_type -> databasa.ListCollectionsRequest
+	8,  // 8: databasa.Databasa.CreateIndex:input_type -> databasa.CreateIndexRequest
+	10, // 9: databasa.Databasa.DropIndex:input_type -> databasa.DropIndexRequest
+	12, // 10: databasa.Databasa.Insert:input_type -> databasa.InsertRequest
+	14, // 11: databasa.Databasa.Get:input_type -> databasa.GetRequest
+	16, // 12: databasa.Databasa.Delete:input_type -> databasa.DeleteRequest
+	22, // 13: databasa.Databasa.BatchInsert:input_type -> databasa.BatchInsertRequest
+	18, // 14: databasa.Databasa.Search:input_type -> databasa.SearchRequest
+	2,  // 15: databasa.Databasa.CreateCollection:output_type -> databasa.CreateCollectionResponse
+	4,  // 16: databasa.Databasa.DeleteCollection:output_type -> databasa.DeleteCollectionResponse
+	7,  // 17: databasa.Databasa.ListCollections:output_type -> databasa.ListCollectionsResponse
+	9,  // 18: databasa.Databasa.CreateIndex:output_type -> databasa.CreateIndexResponse
+	11, // 19: databasa.Databasa.DropIndex:output_type -> databasa.DropIndexResponse
+	13, // 20: databasa.Databasa.Insert:output_type -> databasa.InsertResponse
+	15, // 21: databasa.Databasa.Get:output_type -> databasa.GetResponse
+	17, // 22: databasa.Databasa.Delete:output_type -> databasa.DeleteResponse
+	23, // 23: databasa.Databasa.BatchInsert:output_type -> databasa.BatchInsertResponse
+	20, // 24: databasa.Databasa.Search:output_type -> databasa.SearchResponse
 	15, // [15:25] is the sub-list for method output_type
 	5,  // [5:15] is the sub-list for method input_type
 	5,  // [5:5] is the sub-list for extension type_name
@@ -1346,27 +1364,27 @@ var file_kekdb_proto_depIdxs = []int32{
 	0,  // [0:5] is the sub-list for field type_name
 }
 
-func init() { file_kekdb_proto_init() }
-func file_kekdb_proto_init() {
-	if File_kekdb_proto != nil {
+func init() { file_databasa_proto_init() }
+func file_databasa_proto_init() {
+	if File_databasa_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kekdb_proto_rawDesc), len(file_kekdb_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_databasa_proto_rawDesc), len(file_databasa_proto_rawDesc)),
 			NumEnums:      1,
 			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_kekdb_proto_goTypes,
-		DependencyIndexes: file_kekdb_proto_depIdxs,
-		EnumInfos:         file_kekdb_proto_enumTypes,
-		MessageInfos:      file_kekdb_proto_msgTypes,
+		GoTypes:           file_databasa_proto_goTypes,
+		DependencyIndexes: file_databasa_proto_depIdxs,
+		EnumInfos:         file_databasa_proto_enumTypes,
+		MessageInfos:      file_databasa_proto_msgTypes,
 	}.Build()
-	File_kekdb_proto = out.File
-	file_kekdb_proto_goTypes = nil
-	file_kekdb_proto_depIdxs = nil
+	File_databasa_proto = out.File
+	file_databasa_proto_goTypes = nil
+	file_databasa_proto_depIdxs = nil
 }

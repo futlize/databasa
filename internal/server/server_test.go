@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	pb "github.com/juniodev/kekdb/pkg/pb"
+	pb "github.com/futlize/databasa/pkg/pb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"

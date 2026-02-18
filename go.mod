@@ -1,4 +1,4 @@
-module github.com/juniodev/kekdb
+module github.com/futlize/databasa
 
 go 1.25.5
 

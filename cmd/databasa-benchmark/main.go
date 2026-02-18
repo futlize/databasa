@@ -14,8 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/juniodev/kekdb/internal/server"
-	pb "github.com/juniodev/kekdb/pkg/pb"
+	"github.com/futlize/databasa/internal/server"
+	pb "github.com/futlize/databasa/pkg/pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -164,7 +164,7 @@ func run(cfg config) error {
 	}
 	defer conn.Close()
 
-	client := pb.NewKekDBClient(conn)
+	client := pb.NewDatabasaClient(conn)
 
 	metric, err := parseMetric(cfg.metric)
 	if err != nil {
@@ -257,7 +257,7 @@ func startEmbeddedServer(cfg config) (addr string, stop func(), dataDir string, 
 	})
 
 	grpcServer := grpc.NewServer()
-	pb.RegisterKekDBServer(grpcServer, srv)
+	pb.RegisterDatabasaServer(grpcServer, srv)
 
 	lis, err := net.Listen("tcp", cfg.embeddedListen)
 	if err != nil {
@@ -310,7 +310,7 @@ func startEmbeddedServer(cfg config) (addr string, stop func(), dataDir string, 
 	return lis.Addr().String(), stop, dataDir, nil
 }
 
-func deleteCollection(ctx context.Context, client pb.KekDBClient, collection string, timeout time.Duration) error {
+func deleteCollection(ctx context.Context, client pb.DatabasaClient, collection string, timeout time.Duration) error {
 	callCtx, cancel := rpcContext(ctx, timeout)
 	defer cancel()
 
@@ -321,7 +321,7 @@ func deleteCollection(ctx context.Context, client pb.KekDBClient, collection str
 	return nil
 }
 
-func createCollection(ctx context.Context, client pb.KekDBClient, collection string, dimension uint32, metric pb.Metric, timeout time.Duration) error {
+func createCollection(ctx context.Context, client pb.DatabasaClient, collection string, dimension uint32, metric pb.Metric, timeout time.Duration) error {
 	callCtx, cancel := rpcContext(ctx, timeout)
 	defer cancel()
 
@@ -336,7 +336,7 @@ func createCollection(ctx context.Context, client pb.KekDBClient, collection str
 	return nil
 }
 
-func createIndex(ctx context.Context, client pb.KekDBClient, collection string, m uint32, efConstruction uint32, timeout time.Duration) error {
+func createIndex(ctx context.Context, client pb.DatabasaClient, collection string, m uint32, efConstruction uint32, timeout time.Duration) error {
 	callCtx, cancel := rpcContext(ctx, timeout)
 	defer cancel()
 
@@ -351,7 +351,7 @@ func createIndex(ctx context.Context, client pb.KekDBClient, collection string, 
 	return nil
 }
 
-func runInsertBenchmark(client pb.KekDBClient, cfg config) (uint64, error) {
+func runInsertBenchmark(client pb.DatabasaClient, cfg config) (uint64, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

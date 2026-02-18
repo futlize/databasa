@@ -5,18 +5,17 @@ This file is the canonical reference for integrating Databasa from any language.
 ## 1) Transport and contract
 
 - Protocol: gRPC
-- Service: `kekdb.KekDB`
-- Proto file: `proto/kekdb.proto`
+- Service: `databasa.Databasa`
+- Proto file: `proto/databasa.proto`
 - Default address: `localhost:50051`
-- Package: `kekdb`
-- Compatibility: API package/service identifiers remain `kekdb.KekDB`.
+- Package: `databasa`
 
 ## 2) Integration flow (language-agnostic)
 
-1. Load `proto/kekdb.proto` in your gRPC toolchain.
+1. Load `proto/databasa.proto` in your gRPC toolchain.
 2. Generate client stubs for your language (or use dynamic proto loading).
 3. Connect to Databasa server over gRPC.
-4. Call methods from service `kekdb.KekDB`.
+4. Call methods from service `databasa.Databasa`.
 
 Notes:
 - `top_k`, `ef_search`, batch size and other limits are enforced by server config in `databasa.toml`.
@@ -280,59 +279,59 @@ When `max_data_dir_mb` is reached, write operations also return:
 Create collection:
 ```bash
 grpcurl -plaintext -d '{"name":"docs","dimension":3,"metric":"COSINE"}' \
-  localhost:50051 kekdb.KekDB/CreateCollection
+  localhost:50051 databasa.Databasa/CreateCollection
 ```
 
 Insert:
 ```bash
 grpcurl -plaintext -d '{"collection":"docs","key":"doc:1","embedding":[0.1,0.2,0.3]}' \
-  localhost:50051 kekdb.KekDB/Insert
+  localhost:50051 databasa.Databasa/Insert
 ```
 
 Get:
 ```bash
 grpcurl -plaintext -d '{"collection":"docs","key":"doc:1"}' \
-  localhost:50051 kekdb.KekDB/Get
+  localhost:50051 databasa.Databasa/Get
 ```
 
 BatchInsert:
 ```bash
 grpcurl -plaintext -d '{"collection":"docs","items":[{"key":"doc:2","embedding":[0.2,0.3,0.4]}]}' \
-  localhost:50051 kekdb.KekDB/BatchInsert
+  localhost:50051 databasa.Databasa/BatchInsert
 ```
 
 CreateIndex:
 ```bash
 grpcurl -plaintext -d '{"collection":"docs","m":16,"ef_construction":200}' \
-  localhost:50051 kekdb.KekDB/CreateIndex
+  localhost:50051 databasa.Databasa/CreateIndex
 ```
 
 Search (without embedding):
 ```bash
 grpcurl -plaintext -d '{"collection":"docs","embedding":[0.1,0.2,0.3],"top_k":5,"ef_search":50,"include_embedding":false}' \
-  localhost:50051 kekdb.KekDB/Search
+  localhost:50051 databasa.Databasa/Search
 ```
 
 Search (with embedding):
 ```bash
 grpcurl -plaintext -d '{"collection":"docs","embedding":[0.1,0.2,0.3],"top_k":5,"include_embedding":true}' \
-  localhost:50051 kekdb.KekDB/Search
+  localhost:50051 databasa.Databasa/Search
 ```
 
 Delete:
 ```bash
 grpcurl -plaintext -d '{"collection":"docs","key":"doc:1"}' \
-  localhost:50051 kekdb.KekDB/Delete
+  localhost:50051 databasa.Databasa/Delete
 ```
 
 DropIndex:
 ```bash
 grpcurl -plaintext -d '{"collection":"docs"}' \
-  localhost:50051 kekdb.KekDB/DropIndex
+  localhost:50051 databasa.Databasa/DropIndex
 ```
 
 DeleteCollection:
 ```bash
 grpcurl -plaintext -d '{"name":"docs"}' \
-  localhost:50051 kekdb.KekDB/DeleteCollection
+  localhost:50051 databasa.Databasa/DeleteCollection
 ```

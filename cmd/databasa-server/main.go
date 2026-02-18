@@ -10,8 +10,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/juniodev/kekdb/internal/server"
-	pb "github.com/juniodev/kekdb/pkg/pb"
+	"github.com/futlize/databasa/internal/server"
+	pb "github.com/futlize/databasa/pkg/pb"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -78,7 +78,7 @@ func main() {
 		grpc.MaxRecvMsgSize(cfg.Server.GRPCMaxRecvMB*1024*1024),
 		grpc.MaxSendMsgSize(cfg.Server.GRPCMaxSendMB*1024*1024),
 	)
-	pb.RegisterKekDBServer(grpcServer, srv)
+	pb.RegisterDatabasaServer(grpcServer, srv)
 
 	if cfg.Server.EnableReflection {
 		reflection.Register(grpcServer)

@@ -18,10 +18,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/juniodev/kekdb/internal/hnsw"
-	"github.com/juniodev/kekdb/internal/resources"
-	"github.com/juniodev/kekdb/internal/storage"
-	pb "github.com/juniodev/kekdb/pkg/pb"
+	"github.com/futlize/databasa/internal/hnsw"
+	"github.com/futlize/databasa/internal/resources"
+	"github.com/futlize/databasa/internal/storage"
+	pb "github.com/futlize/databasa/pkg/pb"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -216,7 +216,7 @@ func (c *collection) count() uint64 {
 
 // Server implements the Databasa gRPC service.
 type Server struct {
-	pb.UnimplementedKekDBServer
+	pb.UnimplementedDatabasaServer
 	mu            sync.RWMutex
 	dataDir       string
 	collections   map[string]*collection

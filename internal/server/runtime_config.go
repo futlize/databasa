@@ -3,7 +3,7 @@ package server
 import (
 	"sync"
 
-	"github.com/juniodev/kekdb/internal/resources"
+	"github.com/futlize/databasa/internal/resources"
 )
 
 type RuntimeConfig struct {

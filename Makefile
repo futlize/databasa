@@ -12,9 +12,9 @@ all: test build
 
 proto:
 	protoc -I proto \
-		--go_out=. --go_opt=module=github.com/juniodev/kekdb \
-		--go-grpc_out=. --go-grpc_opt=module=github.com/juniodev/kekdb \
-		proto/kekdb.proto
+		--go_out=. --go_opt=module=github.com/futlize/databasa \
+		--go-grpc_out=. --go-grpc_opt=module=github.com/futlize/databasa \
+		proto/databasa.proto
 
 tidy:
 	go mod tidy

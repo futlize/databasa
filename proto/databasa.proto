@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package kekdb;
+package databasa;
 
-option go_package = "github.com/juniodev/kekdb/pkg/pb";
+option go_package = "github.com/futlize/databasa/pkg/pb";
 
 // ─── Enums ───────────────────────────────────────────────
 
@@ -123,7 +123,7 @@ message BatchInsertResponse {
 
 // ─── Service ─────────────────────────────────────────────
 
-service KekDB {
+service Databasa {
   // Collection management
   rpc CreateCollection(CreateCollectionRequest) returns (CreateCollectionResponse);
   rpc DeleteCollection(DeleteCollectionRequest) returns (DeleteCollectionResponse);
