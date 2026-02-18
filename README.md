@@ -64,6 +64,20 @@ grpcurl -plaintext -d '{"collection":"embeddings","embedding":[0.1,0.2,0.3],"top
   localhost:50051 databasa.Databasa/Search
 ```
 
+## Benchmark (200k fixo)
+
+O benchmark de insert agora usa contagem fixa de `200000` vetores.
+
+```bash
+go run ./cmd/databasa-benchmark -embedded=true -workers 4 -batch-size 1000
+```
+
+PowerShell:
+
+```powershell
+pwsh ./scripts/benchmark-insert-500k.ps1 -Embedded
+```
+
 ## Configuracao minima
 
 Arquivo `databasa.toml`:

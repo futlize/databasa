@@ -3,9 +3,13 @@ package server
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	pb "github.com/futlize/databasa/pkg/pb"
 	"google.golang.org/grpc/codes"
@@ -510,5 +514,173 @@ func TestNewWithConfigIndexFlushOpsSupportsZero(t *testing.T) {
 	defer srvDefault.Close()
 	if srvDefault.indexFlushOps != defaultIndexFlushOps {
 		t.Fatalf("expected default index flush ops %d, got %d", defaultIndexFlushOps, srvDefault.indexFlushOps)
+	}
+}
+
+func TestQueueFullUnderLoadDoesNotDeadlock(t *testing.T) {
+	restoreRuntime := withRuntimeConfig(t, RuntimeConfig{
+		MaxWorkers:          1,
+		InsertQueueSize:     1,
+		MemoryBudgetPercent: DefaultRuntimeConfig().MemoryBudgetPercent,
+	})
+	defer restoreRuntime()
+
+	srv, err := NewWithConfig(t.TempDir(), 1, 0, "none")
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	defer srv.Close()
+
+	ctx := context.Background()
+	if _, err := srv.CreateCollection(ctx, &pb.CreateCollectionRequest{
+		Name:      "docs",
+		Dimension: 8,
+		Metric:    pb.Metric_L2,
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := srv.CreateIndex(ctx, &pb.CreateIndexRequest{Collection: "docs"}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+
+	const inserts = 200
+	var successCount atomic.Int64
+	errCh := make(chan error, inserts)
+	var wg sync.WaitGroup
+	for i := 0; i < inserts; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			insertCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			_, err := srv.Insert(insertCtx, &pb.InsertRequest{
+				Collection: "docs",
+				Key:        fmt.Sprintf("k-%03d", i),
+				Embedding:  []float32{float32(i), 1, 2, 3, 4, 5, 6, 7},
+			})
+			if err == nil {
+				successCount.Add(1)
+				return
+			}
+			code := status.Code(err)
+			if code != codes.ResourceExhausted && code != codes.DeadlineExceeded && code != codes.Canceled {
+				errCh <- err
+			}
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for inserts to complete; possible deadlock")
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("unexpected insert error under queue pressure: %v", err)
+	default:
+	}
+
+	if successCount.Load() == 0 {
+		t.Fatal("expected at least one successful insert under load")
+	}
+}
+
+func TestCloseCompletesUnderHeavyIngestAndIndexing(t *testing.T) {
+	restoreRuntime := withRuntimeConfig(t, RuntimeConfig{
+		MaxWorkers:          1,
+		InsertQueueSize:     1,
+		MemoryBudgetPercent: DefaultRuntimeConfig().MemoryBudgetPercent,
+	})
+	defer restoreRuntime()
+
+	srv, err := NewWithConfig(t.TempDir(), 1, 0, "none")
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	ctx := context.Background()
+	if _, err := srv.CreateCollection(ctx, &pb.CreateCollectionRequest{
+		Name:      "docs",
+		Dimension: 8,
+		Metric:    pb.Metric_L2,
+	}); err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := srv.CreateIndex(ctx, &pb.CreateIndexRequest{Collection: "docs"}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+
+	stopProducers := make(chan struct{})
+	var producerWG sync.WaitGroup
+	for g := 0; g < 4; g++ {
+		g := g
+		producerWG.Add(1)
+		go func() {
+			defer producerWG.Done()
+			i := 0
+			for {
+				select {
+				case <-stopProducers:
+					return
+				default:
+				}
+
+				insertCtx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+				_, _ = srv.Insert(insertCtx, &pb.InsertRequest{
+					Collection: "docs",
+					Key:        fmt.Sprintf("p-%d-%d", g, i),
+					Embedding:  []float32{float32(i), 2, 3, 4, 5, 6, 7, 8},
+				})
+				cancel()
+				i++
+			}
+		}()
+	}
+
+	time.Sleep(400 * time.Millisecond)
+	close(stopProducers)
+
+	closeDone := make(chan struct{})
+	go func() {
+		srv.Close()
+		close(closeDone)
+	}()
+
+	select {
+	case <-closeDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("server close timed out under heavy ingest/indexing")
+	}
+
+	producerWG.Wait()
+}
+
+func withRuntimeConfig(t *testing.T, cfg RuntimeConfig) func() {
+	t.Helper()
+	prev := DefaultRuntimeConfig()
+	merged := prev
+	if cfg.MaxWorkers > 0 {
+		merged.MaxWorkers = cfg.MaxWorkers
+	}
+	if cfg.InsertQueueSize > 0 {
+		merged.InsertQueueSize = cfg.InsertQueueSize
+	}
+	if cfg.MemoryBudgetPercent > 0 {
+		merged.MemoryBudgetPercent = cfg.MemoryBudgetPercent
+	}
+	merged.BulkLoadMode = cfg.BulkLoadMode
+
+	SetDefaultRuntimeConfig(merged)
+	return func() {
+		SetDefaultRuntimeConfig(prev)
 	}
 }

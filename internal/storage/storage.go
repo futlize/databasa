@@ -89,6 +89,8 @@ type VectorStore struct {
 	closeCh   chan struct{}
 	closeOnce sync.Once
 	bgWG      sync.WaitGroup
+	bgCtx     context.Context
+	bgCancel  context.CancelFunc
 }
 
 type memRecord struct {
@@ -144,6 +146,7 @@ func OpenWithCompression(dir string, name string, dimension uint32, metric, comp
 
 	metric = normalizeMetric(metric)
 	compression = normalizeCompression(compression)
+	bgCtx, bgCancel := context.WithCancel(context.Background())
 
 	vs := &VectorStore{
 		dir:               dir,
@@ -158,6 +161,8 @@ func OpenWithCompression(dir string, name string, dimension uint32, metric, comp
 		flushCh:           make(chan struct{}, 1),
 		compactCh:         make(chan struct{}, 1),
 		closeCh:           make(chan struct{}),
+		bgCtx:             bgCtx,
+		bgCancel:          bgCancel,
 		meta: Meta{
 			Name:        name,
 			Dimension:   dimension,
@@ -212,7 +217,7 @@ func (vs *VectorStore) startBackgroundWorkers() {
 func (vs *VectorStore) withWorker(op string, fn func() error) error {
 	if vs.resourceManager != nil {
 		for {
-			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			ctx, cancel := context.WithTimeout(vs.bgCtx, 100*time.Millisecond)
 			err := vs.resourceManager.AcquireWorker(ctx, op)
 			cancel()
 			if err == nil {
@@ -237,7 +242,7 @@ func (vs *VectorStore) flushLoop() {
 	for {
 		select {
 		case <-vs.closeCh:
-			_ = vs.withWorker("storage_flush", func() error { return vs.flushCycle(true) })
+			_ = vs.flushCycle(true)
 			return
 		case <-vs.flushCh:
 			_ = vs.withWorker("storage_flush", func() error { return vs.flushCycle(false) })
@@ -419,7 +424,7 @@ func (vs *VectorStore) compactIfNeeded() error {
 	dimension := vs.meta.Dimension
 	vs.mu.RUnlock()
 	reserveBytes := uint64(activeCount) * uint64(dimension) * 8
-	if err := vs.resourceManager.WaitForMemory(context.Background(), reserveBytes, "storage_compaction_snapshot"); err != nil {
+	if err := vs.resourceManager.WaitForMemory(vs.bgCtx, reserveBytes, "storage_compaction_snapshot"); err != nil {
 		return err
 	}
 
@@ -485,11 +490,11 @@ func (vs *VectorStore) compactIfNeeded() error {
 }
 
 // Insert adds a key+embedding pair and returns the internal ID.
-func (vs *VectorStore) Insert(key string, embedding []float32) (uint64, error) {
-	if err := vs.resourceManager.WaitInsertAllowance(context.Background()); err != nil {
+func (vs *VectorStore) Insert(ctx context.Context, key string, embedding []float32) (uint64, error) {
+	if err := vs.resourceManager.WaitInsertAllowance(ctx); err != nil {
 		return 0, err
 	}
-	if err := vs.resourceManager.WaitForMemory(context.Background(), uint64(len(embedding))*8, "storage_insert"); err != nil {
+	if err := vs.resourceManager.WaitForMemory(ctx, uint64(len(embedding))*8, "storage_insert"); err != nil {
 		return 0, err
 	}
 
@@ -530,15 +535,15 @@ func (vs *VectorStore) Insert(key string, embedding []float32) (uint64, error) {
 }
 
 // BatchInsert inserts/upserts multiple vectors.
-func (vs *VectorStore) BatchInsert(items []BatchInsertItem) ([]BatchInsertResult, error) {
-	if err := vs.resourceManager.WaitInsertAllowance(context.Background()); err != nil {
+func (vs *VectorStore) BatchInsert(ctx context.Context, items []BatchInsertItem) ([]BatchInsertResult, error) {
+	if err := vs.resourceManager.WaitInsertAllowance(ctx); err != nil {
 		return nil, err
 	}
 	var reserveBytes uint64
 	for _, item := range items {
 		reserveBytes += uint64(len(item.Embedding)) * 8
 	}
-	if err := vs.resourceManager.WaitForMemory(context.Background(), reserveBytes, "storage_batch_insert"); err != nil {
+	if err := vs.resourceManager.WaitForMemory(ctx, reserveBytes, "storage_batch_insert"); err != nil {
 		return nil, err
 	}
 
@@ -742,7 +747,7 @@ func (vs *VectorStore) AllIDs() []uint64 {
 
 // SearchBruteForceTopK scans active vectors in memory.
 // Active state already includes WAL-backed memtable writes and segment-backed state.
-func (vs *VectorStore) SearchBruteForceTopK(query []float32, topK int) ([]SearchHit, error) {
+func (vs *VectorStore) SearchBruteForceTopK(ctx context.Context, query []float32, topK int) ([]SearchHit, error) {
 	if topK <= 0 {
 		return nil, nil
 	}
@@ -759,7 +764,7 @@ func (vs *VectorStore) SearchBruteForceTopK(query []float32, topK int) ([]Search
 	activeCount := len(vs.keyToID)
 	vs.mu.RUnlock()
 
-	if err := vs.resourceManager.WaitForMemory(context.Background(), uint64(activeCount)*uint64(dimension)*4, "storage_search_snapshot"); err != nil {
+	if err := vs.resourceManager.WaitForMemory(ctx, uint64(activeCount)*uint64(dimension)*4, "storage_search_snapshot"); err != nil {
 		return nil, err
 	}
 
@@ -1455,6 +1460,7 @@ func (vs *VectorStore) Close() error {
 	var closeErr error
 	vs.closeOnce.Do(func() {
 		close(vs.closeCh)
+		vs.bgCancel()
 		vs.bgWG.Wait()
 
 		vs.mu.Lock()

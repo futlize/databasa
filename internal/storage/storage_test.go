@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"math"
 	"reflect"
 	"testing"
@@ -50,11 +51,11 @@ func TestVectorStorePersistAndAppendAfterReopen(t *testing.T) {
 
 	v1 := []float32{1, 2, 3}
 	v2 := []float32{4, 5, 6}
-	id1, err := store.Insert("a", v1)
+	id1, err := store.Insert(context.Background(), "a", v1)
 	if err != nil {
 		t.Fatalf("insert a: %v", err)
 	}
-	id2, err := store.Insert("b", v2)
+	id2, err := store.Insert(context.Background(), "b", v2)
 	if err != nil {
 		t.Fatalf("insert b: %v", err)
 	}
@@ -85,7 +86,7 @@ func TestVectorStorePersistAndAppendAfterReopen(t *testing.T) {
 	assertVectorClose(t, gotV2, normalizedCopy(v2), 1e-6)
 
 	v3 := []float32{7, 8, 9}
-	id3, err := store.Insert("c", v3)
+	id3, err := store.Insert(context.Background(), "c", v3)
 	if err != nil {
 		t.Fatalf("insert c: %v", err)
 	}
@@ -109,7 +110,7 @@ func TestVectorStoreDeleteAndTombstone(t *testing.T) {
 	}
 	defer store.Close()
 
-	id, err := store.Insert("dead", []float32{1, 1})
+	id, err := store.Insert(context.Background(), "dead", []float32{1, 1})
 	if err != nil {
 		t.Fatalf("insert: %v", err)
 	}
@@ -131,10 +132,10 @@ func TestVectorStoreValidatesDimensionAndMetric(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	if _, err := store.Insert("bad", []float32{1, 2}); err == nil {
+	if _, err := store.Insert(context.Background(), "bad", []float32{1, 2}); err == nil {
 		t.Fatalf("expected dimension mismatch error")
 	}
-	if _, err := store.Insert("ok", []float32{1, 2, 3}); err != nil {
+	if _, err := store.Insert(context.Background(), "ok", []float32{1, 2, 3}); err != nil {
 		t.Fatalf("insert valid vector: %v", err)
 	}
 	if err := store.Close(); err != nil {
@@ -161,7 +162,7 @@ func TestVectorStoreInt8Compression(t *testing.T) {
 	defer store.Close()
 
 	original := []float32{-1.25, 0.05, 0.88, 3.42}
-	if _, err := store.Insert("q", original); err != nil {
+	if _, err := store.Insert(context.Background(), "q", original); err != nil {
 		t.Fatalf("insert compressed vector: %v", err)
 	}
 
@@ -187,14 +188,14 @@ func TestVectorStoreCosineSearchUsesDotOnNormalizedVectors(t *testing.T) {
 	}
 	defer store.Close()
 
-	if _, err := store.Insert("a", []float32{3, 4}); err != nil {
+	if _, err := store.Insert(context.Background(), "a", []float32{3, 4}); err != nil {
 		t.Fatalf("insert a: %v", err)
 	}
-	if _, err := store.Insert("b", []float32{4, 3}); err != nil {
+	if _, err := store.Insert(context.Background(), "b", []float32{4, 3}); err != nil {
 		t.Fatalf("insert b: %v", err)
 	}
 
-	hits, err := store.SearchBruteForceTopK([]float32{6, 8}, 2)
+	hits, err := store.SearchBruteForceTopK(context.Background(), []float32{6, 8}, 2)
 	if err != nil {
 		t.Fatalf("search topk: %v", err)
 	}
@@ -260,17 +261,17 @@ func TestVectorStoreSearchBruteForceTopK(t *testing.T) {
 				vectors["c"][i] = 9
 			}
 
-			if _, err := store.Insert("a", vectors["a"]); err != nil {
+			if _, err := store.Insert(context.Background(), "a", vectors["a"]); err != nil {
 				t.Fatalf("insert a: %v", err)
 			}
-			if _, err := store.Insert("b", vectors["b"]); err != nil {
+			if _, err := store.Insert(context.Background(), "b", vectors["b"]); err != nil {
 				t.Fatalf("insert b: %v", err)
 			}
-			if _, err := store.Insert("c", vectors["c"]); err != nil {
+			if _, err := store.Insert(context.Background(), "c", vectors["c"]); err != nil {
 				t.Fatalf("insert c: %v", err)
 			}
 
-			hits, err := store.SearchBruteForceTopK(tt.query, 2)
+			hits, err := store.SearchBruteForceTopK(context.Background(), tt.query, 2)
 			if err != nil {
 				t.Fatalf("search topk: %v", err)
 			}
@@ -295,11 +296,11 @@ func TestVectorStoreResolveActiveKeys(t *testing.T) {
 	}
 	defer store.Close()
 
-	idA, err := store.Insert("a", []float32{0, 0})
+	idA, err := store.Insert(context.Background(), "a", []float32{0, 0})
 	if err != nil {
 		t.Fatalf("insert a: %v", err)
 	}
-	idB, err := store.Insert("b", []float32{1, 1})
+	idB, err := store.Insert(context.Background(), "b", []float32{1, 1})
 	if err != nil {
 		t.Fatalf("insert b: %v", err)
 	}
@@ -327,7 +328,7 @@ func TestVectorStoreBatchInsertOverwriteAndReopen(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 
-	results, err := store.BatchInsert([]BatchInsertItem{
+	results, err := store.BatchInsert(context.Background(), []BatchInsertItem{
 		{Key: "a", Embedding: []float32{0, 0}},
 		{Key: "b", Embedding: []float32{1, 1}},
 		{Key: "a", Embedding: []float32{2, 2}},

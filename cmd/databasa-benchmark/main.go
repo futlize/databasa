@@ -54,6 +54,7 @@ type batchJob struct {
 
 const (
 	maxBatchInsertRetries = 8
+	fixedInsertCount      = 200000
 )
 
 func main() {
@@ -74,7 +75,7 @@ func parseFlags() config {
 	flag.BoolVar(&cfg.createIndexOnCreate, "create-index-on-create", true, "create HNSW index right after creating the collection")
 	flag.IntVar(&cfg.indexM, "index-m", 16, "HNSW M (max connections per node)")
 	flag.IntVar(&cfg.indexEfConstruction, "index-ef-construction", 200, "HNSW ef_construction (build-time beam width)")
-	flag.IntVar(&cfg.vectors, "vectors", 500000, "number of vectors to insert")
+	flag.IntVar(&cfg.vectors, "vectors", fixedInsertCount, "DEPRECATED: ignored; insert count is fixed to 200000")
 	flag.IntVar(&cfg.dimension, "dimension", 128, "vector dimension")
 	flag.IntVar(&cfg.batchSize, "batch-size", 1000, "vectors per BatchInsert call")
 	flag.IntVar(&cfg.workers, "workers", 1, "number of concurrent workers")
@@ -92,6 +93,7 @@ func parseFlags() config {
 	flag.BoolVar(&cfg.embeddedKeepDataPath, "keep-data", false, "keep embedded data directory after benchmark")
 
 	flag.Parse()
+	cfg.vectors = fixedInsertCount
 	return cfg
 }
 
@@ -133,6 +135,7 @@ func (c config) validate() error {
 
 func run(cfg config) error {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	log.Printf("Insert count is fixed to 200000 for safety and fast validation.")
 
 	targetAddr := cfg.addr
 	cleanup := func() {}
