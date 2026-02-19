@@ -79,7 +79,7 @@ To perform `write`/`admin` operations in optional-auth mode, client must still c
 Open the shell:
 
 ```bash
-databasa --cli --addr 127.0.0.1:50051 --tls off
+databasa --cli --tls off
 ```
 
 The interactive shell now connects and prompts authentication at startup when auth is required.
@@ -104,6 +104,7 @@ dbs1.<key_id>.<secret>
 
 Notes:
 - user/admin management commands are exposed in interactive CLI mode
+- CLI connects only to loopback addresses (`127.0.0.1`, `localhost`, `[::1]`)
 - for a brand-new auth store, the first `CREATE USER ... ADMIN` runs in bootstrap mode
 - key creation/rotation commands print the generated API key once
 - statements containing `PASSWORD` are excluded from CLI history persistence

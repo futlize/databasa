@@ -14,7 +14,6 @@ databasa cli
 
 ```bash
 databasa --cli \
-  --addr 127.0.0.1:50051 \
   --timeout 5s \
   --tls on \
   --ca /path/to/ca.crt \
@@ -32,6 +31,7 @@ databasa --cli \
 ## Startup flow
 
 1. CLI connects to server using the provided flags.
+   The target must be loopback (local server only).
 2. If auth is disabled, prompt opens immediately.
 3. If auth is enabled and no users exist in local auth store, bootstrap flow creates first admin user.
 4. If users already exist, CLI prompts `user` and `password or api key` and authenticates before opening the prompt.
@@ -50,7 +50,7 @@ Commands support multiline input and execute when terminated with `;`.
 
 - `\help`
 - `\quit` / `\q`
-- `\connect <addr>`
+- `\connect <addr>` (loopback only)
 - `\use <collection>`
 - `\collections`
 - `\users` (admin)

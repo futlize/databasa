@@ -86,8 +86,10 @@ Start the server:
 In another terminal, open the interactive shell:
 
 ```bash
-./bin/databasa --cli --addr 127.0.0.1:50051 --tls off
+./bin/databasa --cli --tls off
 ```
+
+CLI targets are loopback-only (`127.0.0.1`/`localhost`/`::1`).
 
 On startup, the CLI connects immediately.
 

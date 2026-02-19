@@ -53,3 +53,22 @@ func TestCLIStatementContainsPasswordCaseInsensitive(t *testing.T) {
 		t.Fatalf("expected detector to ignore statements without PASSWORD")
 	}
 }
+
+func TestValidateCLILocalAddressAcceptsLoopback(t *testing.T) {
+	valid := []string{
+		"127.0.0.1:50051",
+		"localhost:50051",
+		"[::1]:50051",
+	}
+	for _, addr := range valid {
+		if err := validateCLILocalAddress(addr); err != nil {
+			t.Fatalf("expected loopback address %q to be accepted, got err=%v", addr, err)
+		}
+	}
+}
+
+func TestValidateCLILocalAddressRejectsRemoteIP(t *testing.T) {
+	if err := validateCLILocalAddress("10.0.0.119:50051"); err == nil {
+		t.Fatalf("expected remote address to be rejected")
+	}
+}

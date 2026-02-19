@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,7 +76,7 @@ func runCLI(args []string) error {
 	flagSet.SetOutput(os.Stdout)
 
 	configPath := flagSet.String("config", resolvedDefaultConfigPath(), "path to databasa.toml")
-	addr := flagSet.String("addr", "", "target gRPC address (default from config)")
+	addr := flagSet.String("addr", "", "loopback gRPC address (default 127.0.0.1:<port> from config)")
 	timeout := flagSet.Duration("timeout", 5*time.Second, "RPC/connect timeout")
 	tlsMode := flagSet.String("tls", "", "transport security: on|off (default from config)")
 	caFile := flagSet.String("ca", "", "CA bundle file for TLS server verification")
@@ -99,6 +100,9 @@ func runCLI(args []string) error {
 	targetAddr := strings.TrimSpace(*addr)
 	if targetAddr == "" {
 		targetAddr = fmt.Sprintf("127.0.0.1:%d", cfg.Server.Port)
+	}
+	if err := validateCLILocalAddress(targetAddr); err != nil {
+		return err
 	}
 
 	tlsEnabled := cfg.Security.TLSEnabled
@@ -208,6 +212,26 @@ func parseCLITLSMode(raw string) (bool, error) {
 	default:
 		return false, fmt.Errorf("invalid --tls value %q (expected on|off)", raw)
 	}
+}
+
+func validateCLILocalAddress(addr string) error {
+	trimmed := strings.TrimSpace(addr)
+	if trimmed == "" {
+		return errors.New("cli requires a local loopback address")
+	}
+	host, _, err := net.SplitHostPort(trimmed)
+	if err != nil {
+		return fmt.Errorf("invalid --addr %q (expected host:port): %w", addr, err)
+	}
+	host = strings.TrimSpace(host)
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("cli local-only mode: %q is not loopback; use 127.0.0.1:<port> or localhost:<port>", addr)
+	}
+	return nil
 }
 
 func normalizeCLITLSArgs(args []string) []string {
@@ -455,9 +479,13 @@ func (s *cliSession) executeMeta(raw string) (bool, error) {
 		return false, nil
 	case "\\connect":
 		if len(fields) != 2 {
-			return false, errors.New("usage: \\connect <addr>")
+			return false, errors.New("usage: \\connect <addr> (loopback only)")
 		}
-		s.connOpts.addr = strings.TrimSpace(fields[1])
+		target := strings.TrimSpace(fields[1])
+		if err := validateCLILocalAddress(target); err != nil {
+			return false, err
+		}
+		s.connOpts.addr = target
 		if err := s.connect(); err != nil {
 			return false, err
 		}
@@ -533,7 +561,7 @@ func (s *cliSession) printHelp() {
 	fmt.Fprintln(s.out, `Meta-commands:
   \help
   \quit, \q
-  \connect <addr>
+  \connect <addr> (loopback only)
   \use <collection>
   \collections
   \users

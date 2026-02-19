@@ -507,6 +507,8 @@ cat > "${HELPER_BIN}" <<EOF
 set -euo pipefail
 
 SERVICE_NAME="${SERVICE_NAME}"
+REAL_BIN="${INSTALL_BIN}"
+CONFIG_FILE="${CONF_FILE}"
 
 run_root_cmd() {
   if [[ "\${EUID}" -eq 0 ]]; then
@@ -531,7 +533,22 @@ Commands:
   stop
   restart
   logs [--follow]
+  --cli [flags]
+  cli [flags]
+  cert <subcommand> [flags]
 USAGE
+}
+
+has_config_flag() {
+  local arg
+  for arg in "\$@"; do
+    case "\${arg}" in
+      -config|--config|-config=*|--config=*)
+        return 0
+        ;;
+    esac
+  done
+  return 1
 }
 
 cmd="\${1:-}"
@@ -558,6 +575,12 @@ case "\${cmd}" in
     else
       run_root_cmd journalctl -u "\${SERVICE_NAME}" -n 200 --no-pager
     fi
+    ;;
+  --cli|cli|cert)
+    if has_config_flag "\$@"; then
+      exec "\${REAL_BIN}" "\$@"
+    fi
+    exec "\${REAL_BIN}" "\$@" -config "\${CONFIG_FILE}"
     ;;
   *)
     usage

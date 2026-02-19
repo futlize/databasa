@@ -87,15 +87,15 @@ databasa start           # <dbname> start
 databasa stop            # <dbname> stop
 databasa restart         # <dbname> restart
 databasa logs --follow   # <dbname> logs --follow
+databasa --cli           # open interactive DB shell
+databasa cli             # same as --cli
+databasa cert generate   # certificate subcommands
 ```
 
 Important:
-- `/usr/local/bin/databasa` installed by `scripts/install.sh` is the **service helper** (status/start/stop/logs).
-- To run the interactive database CLI shell, use the real binary path:
-
-```bash
-sudo /usr/local/lib/databasa/databasa --cli --addr 127.0.0.1:50051 --tls on --insecure
-```
+- `/usr/local/bin/databasa` installed by `scripts/install.sh` proxies service controls and forwards `--cli`/`cli`/`cert` to the real binary at `/usr/local/lib/databasa/databasa`.
+- For `--cli`, if `-config/--config` is not passed, helper injects `-config /etc/databasa/databasa.toml` automatically.
+- CLI connection target is loopback-only (`127.0.0.1`, `localhost`, `[::1]`).
 
 ## Uninstallation
 
