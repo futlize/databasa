@@ -1,85 +1,85 @@
 # Databasa Linux Service (Ubuntu/systemd)
 
-Este guia documenta a instalacao e operacao do Databasa como servico systemd no Ubuntu/Linux.
+This guide documents the installation and operation of Databasa as a systemd service on Ubuntu/Linux.
 
-## Scripts oficiais
+## Official scripts
 
 - `scripts/install.sh`
 - `scripts/uninstall.sh`
 
-## Instalacao
+## Installation
 
-Comandos exatos:
+Exact commands:
 
 ```bash
 sudo ./scripts/install.sh
 ```
 
-`scripts/install.sh` resolve o binario nesta ordem:
+`scripts/install.sh` resolves the binary in this order:
 
-1. `./bin/databasa` (quando ja existe no repo)
-2. `DATABASA_BIN_URL` (URL direta para binario ou `.tar.gz`/`.tgz`)
-3. Release GitHub precompilada (`latest` por padrao)
-4. Build local com Go (fallback)
+1. `./bin/databasa` (when it already exists in the repo)
+2. `DATABASA_BIN_URL` (direct URL for a binary or `.tar.gz`/`.tgz`)
+3. Precompiled GitHub Release (`latest` by default)
+4. Local build with Go (fallback)
 
-Variaveis opcionais para controlar download:
+Optional variables to control download:
 
-- `DATABASA_BIN_URL`: URL explicita de binario/arquivo.
-- `DATABASA_RELEASE_REPO`: repo para download de release (default: `futlize/databasa`).
-- `DATABASA_RELEASE_TAG`: tag da release (default: `latest`).
-- `DATABASA_RELEASE_ASSET`: nome exato do asset (quando quiser fixar um artefato especifico).
+- `DATABASA_BIN_URL`: explicit binary/file URL.
+- `DATABASA_RELEASE_REPO`: repo for release download (default: `futlize/databasa`).
+- `DATABASA_RELEASE_TAG`: release tag (default: `latest`).
+- `DATABASA_RELEASE_ASSET`: exact asset name (when you want to pin a specific artifact).
 
-Exemplo sem Go, fixando uma tag:
+Example without Go, pinning a tag:
 
 ```bash
 export DATABASA_RELEASE_TAG=v0.1.0
 sudo ./scripts/install.sh
 ```
 
-O instalador cria:
+The installer creates:
 
-- usuario/grupo dedicado: `databasa:databasa`
-- unit systemd com restart automatico em falha e habilitado no boot
-- helper CLI em `/usr/local/bin/databasa`
+- dedicated user/group: `databasa:databasa`
+- systemd unit with automatic restart on failure and enabled at boot
+- CLI helper at `/usr/local/bin/databasa`
 
-## Atualizacao
+## Update
 
-Para atualizar em servidor ja instalado, execute novamente o instalador.
-Ele atualiza o binario e reinicia o servico, mantendo a config existente em `/etc/databasa/databasa.toml`.
+To update an already installed server, run the installer again.
+It updates the binary and restarts the service, keeping the existing config at `/etc/databasa/databasa.toml`.
 
-Atualizar para a release mais recente (`latest`):
+Update to the latest release (`latest`):
 
 ```bash
 cd ~/databasa/scripts
 sudo ./install.sh
 ```
 
-Atualizar para uma tag especifica:
+Update to a specific tag:
 
 ```bash
 cd ~/databasa/scripts
 sudo DATABASA_RELEASE_TAG=v0.1.1 ./install.sh
 ```
 
-Validar depois da atualizacao:
+Validate after the update:
 
 ```bash
 databasa status
 databasa logs --follow
 ```
 
-## Layout FHS
+## FHS Layout
 
-- Config: `/etc/databasa/` (arquivo principal: `/etc/databasa/databasa.toml`)
+- Config: `/etc/databasa/` (main file: `/etc/databasa/databasa.toml`)
 - Env file: `/etc/default/databasa` (`DATABASA_CONFIG`)
-- Data: `/var/lib/databasa/` (dados em `/var/lib/databasa/data`)
+- Data: `/var/lib/databasa/` (data in `/var/lib/databasa/data`)
 - Logs dir: `/var/log/databasa/`
 - Runtime dir: `/run/databasa/`
-- Logs de runtime: `journald` (`journalctl -u databasa`) por baixo dos panos
+- Runtime logs: `journald` (`journalctl -u databasa`) under the hood
 
-## Operacao via CLI helper
+## Operation via CLI helper
 
-`<dbname>` neste repo e `databasa`, portanto:
+`<dbname>` in this repo is `databasa`, therefore:
 
 ```bash
 databasa status          # <dbname> status
@@ -89,15 +89,15 @@ databasa restart         # <dbname> restart
 databasa logs --follow   # <dbname> logs --follow
 ```
 
-## Desinstalacao
+## Uninstallation
 
-Remove service e binarios (mantem config/dados/log dir):
+Remove service and binaries (keeps config/data/log dir):
 
 ```bash
 sudo ./scripts/uninstall.sh
 ```
 
-Remocao completa (inclui config/dados/log dir e usuario/grupo dedicados):
+Complete removal (includes config/data/log dir and dedicated user/group):
 
 ```bash
 sudo ./scripts/uninstall.sh --purge

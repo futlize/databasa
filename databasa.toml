@@ -1,5 +1,5 @@
-# Databasa server configuration (Ubuntu/Linux recommended)
-# Path sugerido: /etc/databasa/databasa.toml
+# Databasa production-ready defaults (balanced profile)
+# Goal: predictable latency with durable WAL behavior and safe guardrails.
 
 [server]
 port = 50051
@@ -8,29 +8,29 @@ grpc_max_send_mb = 64
 enable_reflection = false
 
 [storage]
-data_dir = /var/lib/databasa/data
-shards = 8
+data_dir = ./data
+shards = 4
 compression = int8
-write_mode = strict
+write_mode = performance
 wal_sync_mode = auto
 wal_sync_interval_ms = 10
 wal_batch_wait_ms = 1
 wal_batch_max_ops = 1024
-wal_queue_size = 8192
+wal_queue_size = 4096
 active_partition_max_ops = 20000
 active_partition_max_bytes_mb = 64
 partition_max_count = 12
 partition_merge_fan_in = 4
-partition_index_min_rows = 512
+partition_index_min_rows = 1024
 index_workers = 2
 merge_workers = 1
 optimizer_queue_cap = 256
 index_m = 16
 index_ef_construction = 200
-index_ef_search = 50
+index_ef_search = 64
 
 [guardrails]
-max_top_k = 200
+max_top_k = 256
 max_batch_size = 512
 max_ef_search = 1024
 max_collection_dim = 8192

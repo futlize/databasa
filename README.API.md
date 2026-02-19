@@ -269,8 +269,8 @@ require_rpc_deadline = false
 When `max_data_dir_mb` is reached, write operations also return:
 - `RESOURCE_EXHAUSTED`
 
-Observacao:
-- O servidor nao aplica mais limite interno de slots de concorrencia por request (search/write).
+Note:
+- The server no longer applies an internal request-slot concurrency limit (search/write).
 
 ## 6) Minimal grpcurl examples
 

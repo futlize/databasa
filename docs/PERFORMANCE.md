@@ -12,7 +12,7 @@ Targets below are practical baseline goals for a single node (8 vCPU, NVMe, 128-
   - p99 <= 60ms
 - Mixed load stability:
   - sustained inserts + searches without deadlock/starvation
-  - sem bloqueio por throttling interno de recursos; monitorar memoria do processo sob carga sustentada
+  - no blocking from internal resource throttling; monitor process memory under sustained load
 
 ## Reproducible Commands
 

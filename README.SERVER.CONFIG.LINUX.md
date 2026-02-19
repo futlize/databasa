@@ -1,22 +1,22 @@
-# Databasa - Configuracao de Servidor (Ubuntu/Linux)
+# Databasa - Server Configuration (Ubuntu/Linux)
 
-Este guia cobre somente configuracao do servidor Databasa em Linux.
+This guide covers only Databasa server configuration on Linux.
 
-## 1) Arquivo de configuracao
+## 1) Configuration file
 
-Formato: `TOML` (secoes + `chave = valor`)
+Format: `TOML` (sections + `key = value`)
 
-Caminho recomendado:
+Recommended path:
 
 ```bash
 /etc/databasa/databasa.toml
 ```
 
-## 2) Configuracao recomendada (producao)
+## 2) Recommended configuration (production)
 
 ```ini
 # Databasa server configuration (Ubuntu/Linux recommended)
-# Path sugerido: /etc/databasa/databasa.toml
+# Suggested path: /etc/databasa/databasa.toml
 
 [server]
 port = 50051
@@ -44,49 +44,49 @@ max_data_dir_mb = 102400
 require_rpc_deadline = true
 ```
 
-## 3) Campos e valores aceitos
+## 3) Accepted fields and values
 
 ### `[server]`
 
-- `port`: inteiro > 0. Default: `50051`.
-- `grpc_max_recv_mb`: inteiro > 0. Default: `32`.
-- `grpc_max_send_mb`: inteiro > 0. Default: `32`.
+- `port`: integer > 0. Default: `50051`.
+- `grpc_max_recv_mb`: integer > 0. Default: `32`.
+- `grpc_max_send_mb`: integer > 0. Default: `32`.
 - `enable_reflection`: bool (`true/false`, `1/0`, `yes/no`, `on/off`).
 
 ### `[storage]`
 
-- `data_dir`: caminho da base em disco.
-- `shards`: inteiro > 0. Default: `8`.
-- `compression`: `none` ou `int8`. Default: `int8`.
-- `write_mode`: `strict` ou `performance`. Default: `strict`.
-- `wal_sync_mode`: `auto`, `always`, `periodic` ou `none`. Default: `auto`.
-- `wal_sync_interval_ms`: inteiro > 0. Default: `10`.
-- `wal_batch_wait_ms`: inteiro > 0. Default: `1`.
-- `wal_batch_max_ops`: inteiro > 0. Default: `1024`.
-- `wal_queue_size`: inteiro > 0. Default: `8192`.
+- `data_dir`: on-disk database path.
+- `shards`: integer > 0. Default: `8`.
+- `compression`: `none` or `int8`. Default: `int8`.
+- `write_mode`: `strict` or `performance`. Default: `strict`.
+- `wal_sync_mode`: `auto`, `always`, `periodic` or `none`. Default: `auto`.
+- `wal_sync_interval_ms`: integer > 0. Default: `10`.
+- `wal_batch_wait_ms`: integer > 0. Default: `1`.
+- `wal_batch_max_ops`: integer > 0. Default: `1024`.
+- `wal_queue_size`: integer > 0. Default: `8192`.
 
-Com `wal_sync_mode = auto`:
+With `wal_sync_mode = auto`:
 - `write_mode = strict` => WAL `always`.
 - `write_mode = performance` => WAL `periodic`.
 
-Observacao:
-- O servidor nao aplica mais limite interno de slots de concorrencia por request.
+Note:
+- The server no longer applies an internal request-slot concurrency limit.
 
 ### `[guardrails]`
 
-- `max_top_k`: inteiro > 0. Default: `256`.
-- `max_batch_size`: inteiro > 0. Default: `1000`.
-- `max_ef_search`: inteiro > 0. Default: `4096`.
-- `max_collection_dim`: inteiro > 0. Default: `8192`.
-- `max_data_dir_mb`: inteiro >= 0.  
-  - `0`: sem limite.
+- `max_top_k`: integer > 0. Default: `256`.
+- `max_batch_size`: integer > 0. Default: `1000`.
+- `max_ef_search`: integer > 0. Default: `4096`.
+- `max_collection_dim`: integer > 0. Default: `8192`.
+- `max_data_dir_mb`: integer >= 0.  
+  - `0`: unlimited.
 - `require_rpc_deadline`: bool.
 
-## 4) Override por variavel de ambiente
+## 4) Override via environment variable
 
-`DATABASA_CONFIG` pode definir um caminho alternativo para o arquivo de config.
+`DATABASA_CONFIG` can define an alternative path for the config file.
 
-## 5) Preparacao no Ubuntu
+## 5) Ubuntu preparation
 
 ```bash
 sudo mkdir -p /etc/databasa
@@ -94,7 +94,7 @@ sudo mkdir -p /var/lib/databasa/data
 sudo chown -R $USER:$USER /var/lib/databasa
 ```
 
-## 6) Inicializacao do servidor
+## 6) Server startup
 
 ```bash
 ./databasa -config /etc/databasa/databasa.toml

@@ -1,56 +1,56 @@
 # Databasa
 
-Databasa e um banco vetorial com API gRPC para armazenamento e busca por similaridade.
+Databasa is a vector database with a gRPC API for storage and similarity search.
 
-## Proposta
+## Proposal
 
-O projeto existe para oferecer uma base vetorial simples de operar, com foco em:
+The project exists to offer a simple-to-operate vector foundation, focused on:
 
-- execucao local ou self-hosted
-- API gRPC direta para integracao com qualquer stack
-- persistencia em disco
-- operacao com Docker ou service Linux (systemd)
-- guardrails de API e limites operacionais
+- local or self-hosted execution
+- direct gRPC API for integration with any stack
+- on-disk persistence
+- operation with Docker or Linux service (systemd)
+- API guardrails and operational limits
 
-## Escopo atual
+## Current scope
 
-- Protocolo: gRPC
+- Protocol: gRPC
 - Service API: `databasa.Databasa`
 - Proto: `proto/databasa.proto`
-- Config padrao: `databasa.toml`
-- Porta padrao: `50051`
-- Metricas: `COSINE`, `L2`, `DOT_PRODUCT`
-- Operacoes principais: colecoes, insert/get/delete, batch insert e search
+- Default config: `databasa.toml`
+- Default port: `50051`
+- Metrics: `COSINE`, `L2`, `DOT_PRODUCT`
+- Main operations: collections, insert/get/delete, batch insert, and search
 
-## Arquitetura de ingestao e busca
+## Ingestion and search architecture
 
-- Write path desacoplado: `upsert -> WAL (duravel conforme politica) -> active partition`.
-- Busca sempre consulta `active partition` + `sealed partitions`.
-- ANN (HNSW) e merge/compaction rodam em background por particao, sem bloquear ACK de escrita.
-- Depois de `Insert`/`BatchInsert` bem-sucedido, o vetor fica imediatamente consultavel.
+- Decoupled write path: `upsert -> WAL (durable according to policy) -> active partition`.
+- Search always queries `active partition` + `sealed partitions`.
+- ANN (HNSW) and merge/compaction run in the background per partition, without blocking write ACK.
+- After a successful `Insert`/`BatchInsert`, the vector becomes immediately queryable.
 
-## Uso basico
+## Basic usage
 
-### 1) Rodar localmente
+### 1) Run locally
 
 ```bash
 go run ./cmd/databasa
 ```
 
-Com arquivo de configuracao explicito:
+With an explicit configuration file:
 
 ```bash
 go run ./cmd/databasa -config ./databasa.toml
 ```
 
-### 2) Build do binario
+### 2) Build the binary
 
 ```bash
 go build -o ./bin/databasa ./cmd/databasa
 ./bin/databasa -config ./databasa.toml
 ```
 
-### 2.1) Build de release para Ubuntu (linux/amd64)
+### 2.1) Build a release for Ubuntu (linux/amd64)
 
 PowerShell:
 
@@ -66,7 +66,7 @@ mkdir -p ./dist
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o ./dist/databasa_linux_amd64 ./cmd/databasa
 ```
 
-### 3) Rodar com Docker
+### 3) Run with Docker
 
 ```bash
 cp .env.example .env
@@ -74,7 +74,7 @@ docker compose up --build -d
 docker compose down
 ```
 
-### 4) Smoke test rapido (grpcurl)
+### 4) Quick smoke test (grpcurl)
 
 ```bash
 grpcurl -plaintext -d '{"name":"embeddings","dimension":3,"metric":"COSINE"}' \
@@ -87,9 +87,9 @@ grpcurl -plaintext -d '{"collection":"embeddings","embedding":[0.1,0.2,0.3],"top
   localhost:50051 databasa.Databasa/Search
 ```
 
-## Benchmark (200k fixo)
+## Benchmark (fixed 200k)
 
-O benchmark de insert agora usa contagem fixa de `200000` vetores.
+The insert benchmark now uses a fixed count of `200000` vectors.
 
 ```bash
 go run ./cmd/benchmark -embedded=true -workers 4 -batch-size 1000
@@ -101,9 +101,9 @@ PowerShell:
 pwsh ./scripts/benchmark.ps1 -Embedded
 ```
 
-## Configuracao minima
+## Minimal configuration
 
-Arquivo `databasa.toml`:
+`databasa.toml` file:
 
 ```toml
 [server]
@@ -144,35 +144,35 @@ require_rpc_deadline = false
 ```
 
 `write_mode`:
-- `strict`: perfil de durabilidade WAL estrito (default `always`).
-- `performance`: perfil de durabilidade WAL orientado a throughput (default `periodic`).
+- `strict`: strict WAL durability profile (default `always`).
+- `performance`: throughput-oriented WAL durability profile (default `periodic`).
 
-`wal_sync_mode` (`auto|always|periodic|none`) pode sobrescrever a politica de durabilidade derivada do `write_mode`.
+`wal_sync_mode` (`auto|always|periodic|none`) can override the durability policy derived from `write_mode`.
 
-## Linux service (basico)
+## Linux service (basic)
 
 ```bash
-# Sem Go (usa release precompilada por padrao):
+# Without Go (uses precompiled release by default):
 sudo ./scripts/install.sh
 
-# Opcional: fixar uma tag de release especifica (default = latest)
+# Optional: pin a specific release tag (default = latest)
 # sudo env DATABASA_RELEASE_TAG=v0.1.2 ./scripts/install.sh
 #
-# Opcional: URL explicita do binario/arquivo .tar.gz/.tgz
+# Optional: explicit URL for binary/file .tar.gz/.tgz
 # export DATABASA_BIN_URL="https://.../databasa_linux_amd64"
 # sudo ./scripts/install.sh
 
-# Opcional: compilar localmente (fluxo de desenvolvimento)
+# Optional: local compile (development workflow)
 go build -o ./bin/databasa ./cmd/databasa
 sudo ./scripts/install.sh
 databasa status
 databasa logs --follow
 ```
 
-## Documentacao adicional
+## Additional documentation
 
-- API detalhada: `README.API.md`
-- Service Linux: `docs/LINUX_SERVICE.md`
-- Configuracao Linux: `README.SERVER.CONFIG.LINUX.md`
-- Arquitetura interna: `ARCHITECTURE.md`
+- Detailed API: `README.API.md`
+- Linux service: `docs/LINUX_SERVICE.md`
+- Linux configuration: `README.SERVER.CONFIG.LINUX.md`
+- Internal architecture: `ARCHITECTURE.md`
 - Performance/benchmarks: `docs/PERFORMANCE.md`
