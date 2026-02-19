@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -12,24 +15,47 @@ import (
 	"time"
 
 	"github.com/futlize/databasa/internal/hnsw"
+	"github.com/futlize/databasa/internal/security"
 	"github.com/futlize/databasa/internal/server"
 	"github.com/futlize/databasa/internal/storage"
 	pb "github.com/futlize/databasa/pkg/pb"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
 )
 
 func main() {
+	log.SetFlags(log.LstdFlags)
+
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "auth":
+			if err := runAuthCommand(os.Args[2:]); err != nil {
+				log.Fatalf("auth command failed: %v", err)
+			}
+			return
+		case "cert":
+			if err := runCertCommand(os.Args[2:]); err != nil {
+				log.Fatalf("certificate command failed: %v", err)
+			}
+			return
+		}
+	}
+	runServer(os.Args[1:])
+}
+
+func runServer(args []string) {
 	defaultPath := defaultConfigPath
 	if envPath := strings.TrimSpace(os.Getenv("DATABASA_CONFIG")); envPath != "" {
 		defaultPath = envPath
 	}
 
-	configPath := flag.String("config", defaultPath, "path to Databasa config file (TOML style). Env override: DATABASA_CONFIG")
-	flag.Parse()
-
-	log.SetFlags(log.LstdFlags)
+	flagSet := flag.NewFlagSet("databasa", flag.ContinueOnError)
+	configPath := flagSet.String("config", defaultPath, "path to Databasa config file (TOML style). Env override: DATABASA_CONFIG")
+	if err := flagSet.Parse(args); err != nil {
+		fatalStartup("parse command flags", err)
+	}
 
 	cfg, created, err := LoadOrCreateConfig(*configPath)
 	if err != nil {
@@ -70,7 +96,7 @@ func main() {
 	}
 	server.SetDefaultStorageOptions(storageOpts)
 
-	// Initialize server
+	// Initialize datastore service state before opening listeners.
 	srv, err := server.NewWithConfig(
 		cfg.Storage.DataDir,
 		cfg.Storage.Shards,
@@ -89,25 +115,44 @@ func main() {
 		RequireRPCDeadline: cfg.Guardrails.RequireRPCDeadline,
 	})
 
-	// Create gRPC server
-	grpcServer := grpc.NewServer(
-		grpc.MaxRecvMsgSize(cfg.Server.GRPCMaxRecvMB*1024*1024),
-		grpc.MaxSendMsgSize(cfg.Server.GRPCMaxSendMB*1024*1024),
-	)
+	authenticator, err := security.NewAuthenticator(security.AuthConfig{
+		Enabled:      cfg.Security.AuthEnabled,
+		RequireAuth:  cfg.Security.RequireAuth,
+		APIKeyHeader: cfg.Security.APIKeyHeader,
+	}, security.AuthStorePath(cfg.Storage.DataDir))
+	if err != nil {
+		fatalStartup("initialize authentication", err)
+	}
+
+	grpcOptions := []grpc.ServerOption{
+		grpc.MaxRecvMsgSize(cfg.Server.GRPCMaxRecvMB * 1024 * 1024),
+		grpc.MaxSendMsgSize(cfg.Server.GRPCMaxSendMB * 1024 * 1024),
+		grpc.ChainUnaryInterceptor(authenticator.UnaryServerInterceptor()),
+		grpc.ChainStreamInterceptor(authenticator.StreamServerInterceptor()),
+		grpc.StatsHandler(authenticator),
+	}
+
+	tlsConfig, err := buildServerTLSConfig(cfg.Security)
+	if err != nil {
+		fatalStartup("configure tls", err)
+	}
+	if tlsConfig != nil {
+		grpcOptions = append(grpcOptions, grpc.Creds(credentials.NewTLS(tlsConfig)))
+	}
+
+	grpcServer := grpc.NewServer(grpcOptions...)
 	pb.RegisterDatabasaServer(grpcServer, srv)
 
 	if cfg.Server.EnableReflection {
 		reflection.Register(grpcServer)
 	}
 
-	// Listen
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		fatalStartup(fmt.Sprintf("bind listener on %s", addr), err)
 	}
 
-	// Graceful shutdown
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -122,6 +167,56 @@ func main() {
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+func buildServerTLSConfig(cfg SecurityConfig) (*tls.Config, error) {
+	if !cfg.TLSEnabled {
+		return nil, nil
+	}
+	certFile := strings.TrimSpace(cfg.TLSCertFile)
+	keyFile := strings.TrimSpace(cfg.TLSKeyFile)
+	if certFile == "" || keyFile == "" {
+		return nil, errors.New("tls_enabled=true requires tls_cert_file and tls_key_file")
+	}
+
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("load tls certificate/key pair: %w", err)
+	}
+
+	tlsConfig := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		Certificates: []tls.Certificate{cert},
+		NextProtos:   []string{"h2"},
+	}
+
+	mode := strings.ToLower(strings.TrimSpace(cfg.TLSClientAuth))
+	switch mode {
+	case "", "none":
+		tlsConfig.ClientAuth = tls.NoClientCert
+	case "request":
+		tlsConfig.ClientAuth = tls.RequestClientCert
+	case "require_any":
+		tlsConfig.ClientAuth = tls.RequireAnyClientCert
+	case "verify_if_given":
+		tlsConfig.ClientAuth = tls.VerifyClientCertIfGiven
+	case "require":
+		tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+	default:
+		return nil, fmt.Errorf("invalid tls_client_auth value %q", cfg.TLSClientAuth)
+	}
+
+	if tlsConfig.ClientAuth == tls.VerifyClientCertIfGiven || tlsConfig.ClientAuth == tls.RequireAndVerifyClientCert {
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			return nil, fmt.Errorf("load system cert pool for mTLS verification: %w", err)
+		}
+		if pool == nil {
+			return nil, errors.New("system cert pool is unavailable for mTLS verification")
+		}
+		tlsConfig.ClientCAs = pool
+	}
+	return tlsConfig, nil
 }
 
 func walSyncModeFromConfig(writeMode string, walSyncMode string) storage.WALSyncMode {

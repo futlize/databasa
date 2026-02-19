@@ -9,13 +9,16 @@ This file is the canonical reference for integrating Databasa from any language.
 - Proto file: `proto/databasa.proto`
 - Default address: `localhost:50051`
 - Package: `databasa`
+- Authentication: required by default (API key)
 
 ## 2) Integration flow (language-agnostic)
 
 1. Load `proto/databasa.proto` in your gRPC toolchain.
 2. Generate client stubs for your language (or use dynamic proto loading).
 3. Connect to Databasa server over gRPC.
-4. Call methods from service `databasa.Databasa`.
+4. Call `Login` once with the API key on that channel.
+5. Reuse the same channel for data/admin methods without sending API key metadata again.
+6. If the channel reconnects or a new channel is created, call `Login` again.
 
 Notes:
 - `top_k`, `ef_search`, batch size and other limits are enforced by server config in `databasa.toml`.
@@ -272,64 +275,28 @@ When `max_data_dir_mb` is reached, write operations also return:
 Note:
 - The server no longer applies an internal request-slot concurrency limit (search/write).
 
-## 6) Minimal grpcurl examples
+## 6) Login and request examples
 
-Create collection:
+`grpcurl` can validate the `Login` RPC itself:
+
 ```bash
-grpcurl -plaintext -d '{"name":"docs","dimension":3,"metric":"COSINE"}' \
-  localhost:50051 databasa.Databasa/CreateCollection
+grpcurl -plaintext -d '{"value":"dbs1.<key_id>.<secret>"}' \
+  localhost:50051 databasa.Databasa/Login
 ```
 
-Insert:
-```bash
-grpcurl -plaintext -d '{"collection":"docs","key":"doc:1","embedding":[0.1,0.2,0.3]}' \
-  localhost:50051 databasa.Databasa/Insert
-```
+Important:
+- Databasa sessions are connection-bound.
+- Separate `grpcurl` invocations create separate channels, so they do not reuse the authenticated session.
+- For normal authenticated workflows, use a generated gRPC client and keep one channel open.
 
-Get:
-```bash
-grpcurl -plaintext -d '{"collection":"docs","key":"doc:1"}' \
-  localhost:50051 databasa.Databasa/Get
-```
+Minimal Go flow on one channel:
 
-BatchInsert:
-```bash
-grpcurl -plaintext -d '{"collection":"docs","items":[{"key":"doc:2","embedding":[0.2,0.3,0.4]}]}' \
-  localhost:50051 databasa.Databasa/BatchInsert
-```
+```go
+conn, _ := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+client := pb.NewDatabasaClient(conn)
 
-CreateIndex:
-```bash
-grpcurl -plaintext -d '{"collection":"docs","m":16,"ef_construction":200}' \
-  localhost:50051 databasa.Databasa/CreateIndex
-```
-
-Search (without embedding):
-```bash
-grpcurl -plaintext -d '{"collection":"docs","embedding":[0.1,0.2,0.3],"top_k":5,"ef_search":50,"include_embedding":false}' \
-  localhost:50051 databasa.Databasa/Search
-```
-
-Search (with embedding):
-```bash
-grpcurl -plaintext -d '{"collection":"docs","embedding":[0.1,0.2,0.3],"top_k":5,"include_embedding":true}' \
-  localhost:50051 databasa.Databasa/Search
-```
-
-Delete:
-```bash
-grpcurl -plaintext -d '{"collection":"docs","key":"doc:1"}' \
-  localhost:50051 databasa.Databasa/Delete
-```
-
-DropIndex:
-```bash
-grpcurl -plaintext -d '{"collection":"docs"}' \
-  localhost:50051 databasa.Databasa/DropIndex
-```
-
-DeleteCollection:
-```bash
-grpcurl -plaintext -d '{"name":"docs"}' \
-  localhost:50051 databasa.Databasa/DeleteCollection
+_, _ = client.Login(ctx, &wrapperspb.StringValue{Value: apiKey}) // one-time handshake
+_, _ = client.CreateCollection(ctx, &pb.CreateCollectionRequest{Name: "docs", Dimension: 3, Metric: pb.Metric_COSINE})
+_, _ = client.Insert(ctx, &pb.InsertRequest{Collection: "docs", Key: "doc:1", Embedding: []float32{0.1, 0.2, 0.3}})
+_, _ = client.Search(ctx, &pb.SearchRequest{Collection: "docs", Embedding: []float32{0.1, 0.2, 0.3}, TopK: 5})
 ```

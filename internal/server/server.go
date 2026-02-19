@@ -27,6 +27,8 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protowire"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
+	wrapperspb "google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 const (
@@ -453,6 +455,15 @@ func (s *Server) Close() {
 			_ = sh.store.Close()
 		}
 	})
+}
+
+// Login completes connection-bound authentication handshake.
+func (s *Server) Login(ctx context.Context, req *wrapperspb.StringValue) (*emptypb.Empty, error) {
+	if err := s.validateContext(ctx); err != nil {
+		return nil, err
+	}
+	_ = req
+	return &emptypb.Empty{}, nil
 }
 
 // CreateCollection creates a sharded collection.

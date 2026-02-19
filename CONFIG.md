@@ -34,6 +34,18 @@ Databasa currently exposes gRPC only. There is no HTTP API listener config in th
 | `server.grpc_max_recv_mb` | `64` (`32`) | Max inbound gRPC message size in MB. | Higher value allows larger inserts but increases worst-case memory per request. Lower value improves safety but can reject large batches. | `32-256` | Restart required | Must be compatible with `guardrails.max_batch_size`, vector dimension, and client message size. |
 | `server.grpc_max_send_mb` | `64` (`32`) | Max outbound gRPC message size in MB. | Mostly affects large search responses. Higher allows large payloads; lower reduces memory pressure and response amplification risk. | `32-256` | Restart required | Interacts with `guardrails.max_top_k` and whether embeddings are returned. |
 
+## Security
+
+| Field | Balanced default (code fallback) | What it does | Performance vs durability and tuning behavior | Recommended range | Runtime change | Interactions |
+|---|---|---|---|---|---|---|
+| `security.auth_enabled` | `true` (`true`) | Enables API-key authentication logic. | Lightweight per-request metadata + hash check; negligible overhead in normal load. | `true` in production | Restart required | Works with `security.require_auth` and `security.api_key_header`. |
+| `security.require_auth` | `true` (`true`) | Rejects requests without credentials. | Stronger default security posture. If disabled, anonymous access is allowed. | `true` in production | Restart required | If enabled, clients must send API key on every RPC. |
+| `security.api_key_header` | `authorization` (`authorization`) | Metadata/header key carrying API key (supports `Bearer <key>` format). | No material performance impact. | `authorization` or custom key (`x-api-key`) | Restart required | Used by gRPC auth interceptor. |
+| `security.tls_enabled` | `false` (`false`) | Enables TLS transport for gRPC listener. | Adds TLS handshake/crypto overhead; required for production traffic over untrusted networks. | `true` in production | Restart required | Requires valid `tls_cert_file` and `tls_key_file`. |
+| `security.tls_cert_file` | `./certs/server.crt` (`./certs/server.crt`) | Server certificate chain path. | No request-path cost beyond standard TLS. | Absolute path in production | Restart required | Must match private key. |
+| `security.tls_key_file` | `./certs/server.key` (`./certs/server.key`) | Server private key path. | No request-path cost beyond standard TLS. | Absolute path in production, mode `0600` | Restart required | Must match cert and be readable by service user. |
+| `security.tls_client_auth` | `none` (`none`) | Client cert policy: `none`, `request`, `require_any`, `verify_if_given`, `require`. | mTLS modes add cert verification work on connection setup. | `none` unless mTLS is required | Restart required | `verify_if_given`/`require` validate client certs against system trust store. |
+
 ## Logging
 
 No logging level/format/sink fields exist in the current config schema.

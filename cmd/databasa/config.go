@@ -17,6 +17,7 @@ type AppConfig struct {
 	Server     ServerConfig
 	Storage    StorageConfig
 	Guardrails GuardrailsConfig
+	Security   SecurityConfig
 }
 
 type ServerConfig struct {
@@ -58,6 +59,16 @@ type GuardrailsConfig struct {
 	RequireRPCDeadline bool
 }
 
+type SecurityConfig struct {
+	AuthEnabled   bool
+	RequireAuth   bool
+	APIKeyHeader  string
+	TLSEnabled    bool
+	TLSCertFile   string
+	TLSKeyFile    string
+	TLSClientAuth string
+}
+
 func DefaultAppConfig() AppConfig {
 	return AppConfig{
 		Server: ServerConfig{
@@ -95,6 +106,15 @@ func DefaultAppConfig() AppConfig {
 			MaxCollectionDim:   8192,
 			MaxDataDirMB:       0,
 			RequireRPCDeadline: false,
+		},
+		Security: SecurityConfig{
+			AuthEnabled:   true,
+			RequireAuth:   true,
+			APIKeyHeader:  "authorization",
+			TLSEnabled:    false,
+			TLSCertFile:   "./certs/server.crt",
+			TLSKeyFile:    "./certs/server.key",
+			TLSClientAuth: "none",
 		},
 	}
 }
@@ -172,6 +192,10 @@ func parseConfig(data []byte, cfg *AppConfig) error {
 			}
 		case "guardrails":
 			if err := parseGuardrailsKey(cfg, key, value, lineNo); err != nil {
+				return err
+			}
+		case "security":
+			if err := parseSecurityKey(cfg, key, value, lineNo); err != nil {
 				return err
 			}
 		case "resources":
@@ -412,6 +436,40 @@ func parseGuardrailsKey(cfg *AppConfig, key, value string, lineNo int) error {
 	return nil
 }
 
+func parseSecurityKey(cfg *AppConfig, key, value string, lineNo int) error {
+	switch key {
+	case "auth_enabled":
+		b, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("line %d: invalid bool for security.auth_enabled", lineNo)
+		}
+		cfg.Security.AuthEnabled = b
+	case "require_auth":
+		b, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("line %d: invalid bool for security.require_auth", lineNo)
+		}
+		cfg.Security.RequireAuth = b
+	case "api_key_header":
+		cfg.Security.APIKeyHeader = strings.ToLower(strings.TrimSpace(value))
+	case "tls_enabled":
+		b, err := parseBool(value)
+		if err != nil {
+			return fmt.Errorf("line %d: invalid bool for security.tls_enabled", lineNo)
+		}
+		cfg.Security.TLSEnabled = b
+	case "tls_cert_file":
+		cfg.Security.TLSCertFile = strings.TrimSpace(value)
+	case "tls_key_file":
+		cfg.Security.TLSKeyFile = strings.TrimSpace(value)
+	case "tls_client_auth":
+		cfg.Security.TLSClientAuth = strings.ToLower(strings.TrimSpace(value))
+	default:
+		return fmt.Errorf("line %d: unknown key %q in [security]", lineNo, key)
+	}
+	return nil
+}
+
 func parseBool(value string) (bool, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "1", "true", "yes", "on":
@@ -461,6 +519,15 @@ max_ef_search = %d
 max_collection_dim = %d
 max_data_dir_mb = %d
 require_rpc_deadline = %t
+
+[security]
+auth_enabled = %t
+require_auth = %t
+api_key_header = %s
+tls_enabled = %t
+tls_cert_file = %s
+tls_key_file = %s
+tls_client_auth = %s
 `, cfg.Server.Port, cfg.Server.GRPCMaxRecvMB, cfg.Server.GRPCMaxSendMB, cfg.Server.EnableReflection,
 		cfg.Storage.DataDir, cfg.Storage.Shards, cfg.Storage.Compression, cfg.Storage.WriteMode,
 		cfg.Storage.WALSyncMode, cfg.Storage.WALSyncIntervalMS, cfg.Storage.WALBatchWaitMS, cfg.Storage.WALBatchMaxOps, cfg.Storage.WALQueueSize,
@@ -469,7 +536,9 @@ require_rpc_deadline = %t
 		cfg.Storage.IndexM, cfg.Storage.IndexEfConstruction, cfg.Storage.IndexEfSearch,
 		cfg.Guardrails.MaxTopK, cfg.Guardrails.MaxBatchSize, cfg.Guardrails.MaxEfSearch, cfg.Guardrails.MaxCollectionDim,
 		cfg.Guardrails.MaxDataDirMB,
-		cfg.Guardrails.RequireRPCDeadline)
+		cfg.Guardrails.RequireRPCDeadline,
+		cfg.Security.AuthEnabled, cfg.Security.RequireAuth, cfg.Security.APIKeyHeader,
+		cfg.Security.TLSEnabled, cfg.Security.TLSCertFile, cfg.Security.TLSKeyFile, cfg.Security.TLSClientAuth)
 }
 
 func (c *AppConfig) normalize() {
@@ -566,5 +635,22 @@ func (c *AppConfig) normalize() {
 	}
 	if c.Guardrails.MaxDataDirMB < 0 {
 		c.Guardrails.MaxDataDirMB = defaults.Guardrails.MaxDataDirMB
+	}
+
+	if strings.TrimSpace(c.Security.APIKeyHeader) == "" {
+		c.Security.APIKeyHeader = defaults.Security.APIKeyHeader
+	}
+	c.Security.APIKeyHeader = strings.ToLower(strings.TrimSpace(c.Security.APIKeyHeader))
+	if strings.TrimSpace(c.Security.TLSCertFile) == "" {
+		c.Security.TLSCertFile = defaults.Security.TLSCertFile
+	}
+	if strings.TrimSpace(c.Security.TLSKeyFile) == "" {
+		c.Security.TLSKeyFile = defaults.Security.TLSKeyFile
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Security.TLSClientAuth)) {
+	case "none", "request", "require_any", "verify_if_given", "require":
+		c.Security.TLSClientAuth = strings.ToLower(strings.TrimSpace(c.Security.TLSClientAuth))
+	default:
+		c.Security.TLSClientAuth = defaults.Security.TLSClientAuth
 	}
 }

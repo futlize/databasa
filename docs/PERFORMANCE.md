@@ -25,7 +25,13 @@ go run ./cmd/benchmark -embedded=true -workers 4 -batch-size 1000
 PowerShell:
 
 ```powershell
-pwsh ./scripts/benchmark.ps1 -Embedded
+go run ./cmd/benchmark -embedded=true -workers 4 -batch-size 1000
+```
+
+For explicit local-dev insecure mode in embedded benchmark only:
+
+```bash
+go run ./cmd/benchmark -embedded=true -embedded-dev-no-auth=true
 ```
 
 ### 2) Storage Microbenchmarks

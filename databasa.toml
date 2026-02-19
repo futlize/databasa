@@ -1,5 +1,6 @@
 # Databasa production-ready defaults (balanced profile)
 # Goal: predictable latency with durable WAL behavior and safe guardrails.
+# Security model: Login once per gRPC connection, then session-bound authorization.
 
 [server]
 port = 50051
@@ -36,3 +37,15 @@ max_ef_search = 1024
 max_collection_dim = 8192
 max_data_dir_mb = 102400
 require_rpc_deadline = true
+
+[security]
+# Fail-closed production defaults.
+auth_enabled = true
+require_auth = true
+# Anonymous mode is explicit (`require_auth = false`) and remains read-only only.
+api_key_header = authorization
+# Prefer TLS enabled for production installs.
+tls_enabled = true
+tls_cert_file = ./certs/server.crt
+tls_key_file = ./certs/server.key
+tls_client_auth = none

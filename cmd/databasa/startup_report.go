@@ -75,6 +75,8 @@ func logStartupInitializationReport(cfg AppConfig, configPath string, opts stora
 		{name: "insert queue capacity", value: formatCount(int64(opts.WALQueueSize))},
 		{name: "index queue capacity", value: formatCount(int64(opts.OptimizerQueueCap))},
 		{name: "optimizer queue capacity", value: formatCount(int64(opts.OptimizerQueueCap))},
+		{name: "authentication", value: authStartupSummary(cfg.Security)},
+		{name: "transport security", value: tlsStartupSummary(cfg.Security)},
 		{name: "listen address", value: listenAddr},
 	})
 
@@ -121,6 +123,8 @@ func fatalStartup(stage string, err error) {
 		log.Printf("ERROR diagnostic: wal appears corrupted or incompatible. inspect wal files in shard directories before restarting.")
 	case strings.Contains(msg, "create data dir") || strings.Contains(msg, "read data dir") || strings.Contains(msg, "create dir"):
 		log.Printf("ERROR diagnostic: invalid or inaccessible storage directory configuration.")
+	case strings.Contains(msg, "tls") && strings.Contains(msg, "certificate"):
+		log.Printf("ERROR diagnostic: tls certificate/key is invalid, unreadable, or mismatched. verify tls_cert_file and tls_key_file paths and permissions.")
 	}
 
 	os.Exit(1)
@@ -221,4 +225,30 @@ func yesNo(v bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+func authStartupSummary(cfg SecurityConfig) string {
+	if !cfg.AuthEnabled {
+		return "disabled"
+	}
+	mode := "optional"
+	if cfg.RequireAuth {
+		mode = "required"
+	}
+	header := strings.TrimSpace(cfg.APIKeyHeader)
+	if header == "" {
+		header = "authorization"
+	}
+	return fmt.Sprintf("%s (header=%s)", mode, header)
+}
+
+func tlsStartupSummary(cfg SecurityConfig) string {
+	if !cfg.TLSEnabled {
+		return "disabled"
+	}
+	mode := strings.TrimSpace(cfg.TLSClientAuth)
+	if mode == "" {
+		mode = "none"
+	}
+	return fmt.Sprintf("enabled (client_auth=%s cert=%s key=%s)", mode, cfg.TLSCertFile, cfg.TLSKeyFile)
 }

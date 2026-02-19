@@ -42,6 +42,15 @@ max_ef_search = 1024
 max_collection_dim = 8192
 max_data_dir_mb = 102400
 require_rpc_deadline = true
+
+[security]
+auth_enabled = true
+require_auth = true
+api_key_header = authorization
+tls_enabled = true
+tls_cert_file = /etc/databasa/certs/server.crt
+tls_key_file = /etc/databasa/certs/server.key
+tls_client_auth = none
 ```
 
 ## 3) Accepted fields and values
@@ -81,6 +90,16 @@ Note:
 - `max_data_dir_mb`: integer >= 0.  
   - `0`: unlimited.
 - `require_rpc_deadline`: bool.
+
+### `[security]`
+
+- `auth_enabled`: bool. Default: `true`.
+- `require_auth`: bool. Default: `true`.
+- `api_key_header`: header/metadata key carrying API key. Default: `authorization`.
+- `tls_enabled`: bool. Default: `false`.
+- `tls_cert_file`: server certificate path.
+- `tls_key_file`: server private key path.
+- `tls_client_auth`: `none`, `request`, `require_any`, `verify_if_given`, `require`.
 
 ## 4) Override via environment variable
 

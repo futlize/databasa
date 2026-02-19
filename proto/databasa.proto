@@ -4,6 +4,9 @@ package databasa;
 
 option go_package = "github.com/futlize/databasa/pkg/pb";
 
+import "google/protobuf/empty.proto";
+import "google/protobuf/wrappers.proto";
+
 // ─── Enums ───────────────────────────────────────────────
 
 enum Metric {
@@ -124,6 +127,10 @@ message BatchInsertResponse {
 // ─── Service ─────────────────────────────────────────────
 
 service Databasa {
+  // Connection login/auth handshake.
+  // Send API key once (StringValue.value), then reuse the same authenticated gRPC channel.
+  rpc Login(google.protobuf.StringValue) returns (google.protobuf.Empty);
+
   // Collection management
   rpc CreateCollection(CreateCollectionRequest) returns (CreateCollectionResponse);
   rpc DeleteCollection(DeleteCollectionRequest) returns (DeleteCollectionResponse);

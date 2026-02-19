@@ -11,6 +11,8 @@ import (
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
+	wrapperspb "google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -19,6 +21,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	Databasa_Login_FullMethodName            = "/databasa.Databasa/Login"
 	Databasa_CreateCollection_FullMethodName = "/databasa.Databasa/CreateCollection"
 	Databasa_DeleteCollection_FullMethodName = "/databasa.Databasa/DeleteCollection"
 	Databasa_ListCollections_FullMethodName  = "/databasa.Databasa/ListCollections"
@@ -35,6 +38,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type DatabasaClient interface {
+	// Connection login/auth handshake.
+	Login(ctx context.Context, in *wrapperspb.StringValue, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Collection management
 	CreateCollection(ctx context.Context, in *CreateCollectionRequest, opts ...grpc.CallOption) (*CreateCollectionResponse, error)
 	DeleteCollection(ctx context.Context, in *DeleteCollectionRequest, opts ...grpc.CallOption) (*DeleteCollectionResponse, error)
@@ -57,6 +62,16 @@ type databasaClient struct {
 
 func NewDatabasaClient(cc grpc.ClientConnInterface) DatabasaClient {
 	return &databasaClient{cc}
+}
+
+func (c *databasaClient) Login(ctx context.Context, in *wrapperspb.StringValue, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, Databasa_Login_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *databasaClient) CreateCollection(ctx context.Context, in *CreateCollectionRequest, opts ...grpc.CallOption) (*CreateCollectionResponse, error) {
@@ -163,6 +178,8 @@ func (c *databasaClient) Search(ctx context.Context, in *SearchRequest, opts ...
 // All implementations must embed UnimplementedDatabasaServer
 // for forward compatibility.
 type DatabasaServer interface {
+	// Connection login/auth handshake.
+	Login(context.Context, *wrapperspb.StringValue) (*emptypb.Empty, error)
 	// Collection management
 	CreateCollection(context.Context, *CreateCollectionRequest) (*CreateCollectionResponse, error)
 	DeleteCollection(context.Context, *DeleteCollectionRequest) (*DeleteCollectionResponse, error)
@@ -187,6 +204,9 @@ type DatabasaServer interface {
 // pointer dereference when methods are called.
 type UnimplementedDatabasaServer struct{}
 
+func (UnimplementedDatabasaServer) Login(context.Context, *wrapperspb.StringValue) (*emptypb.Empty, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Login not implemented")
+}
 func (UnimplementedDatabasaServer) CreateCollection(context.Context, *CreateCollectionRequest) (*CreateCollectionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateCollection not implemented")
 }
@@ -236,6 +256,24 @@ func RegisterDatabasaServer(s grpc.ServiceRegistrar, srv DatabasaServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&Databasa_ServiceDesc, srv)
+}
+
+func _Databasa_Login_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(wrapperspb.StringValue)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DatabasaServer).Login(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Databasa_Login_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DatabasaServer).Login(ctx, req.(*wrapperspb.StringValue))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _Databasa_CreateCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -425,6 +463,10 @@ var Databasa_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "databasa.Databasa",
 	HandlerType: (*DatabasaServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Login",
+			Handler:    _Databasa_Login_Handler,
+		},
 		{
 			MethodName: "CreateCollection",
 			Handler:    _Databasa_CreateCollection_Handler,

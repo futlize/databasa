@@ -34,6 +34,9 @@ ENV_FILE="/etc/default/${DB_NAME}"
 DATA_ROOT="/var/lib/${DB_NAME}"
 DATA_DIR="${DATA_ROOT}/data"
 LOG_DIR="/var/log/${DB_NAME}"
+CERT_DIR="${CONF_DIR}/certs"
+DEFAULT_CERT_FILE="${CERT_DIR}/server.crt"
+DEFAULT_KEY_FILE="${CERT_DIR}/server.key"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run as root. Example: sudo ./scripts/install.sh" >&2
@@ -198,6 +201,99 @@ build_binary_with_go() {
   return 0
 }
 
+trim_toml_value() {
+  local raw="$1"
+  raw="$(printf "%s" "${raw}" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+  if [[ "${raw}" =~ ^\".*\"$ || "${raw}" =~ ^\'.*\'$ ]]; then
+    raw="${raw:1:${#raw}-2}"
+  fi
+  printf "%s" "${raw}"
+}
+
+read_toml_key() {
+  local file="$1"
+  local key="$2"
+  local value
+  value="$(sed -nE "s|^[[:space:]]*${key}[[:space:]]*=[[:space:]]*([^#;]+).*$|\\1|p" "${file}" | head -n1 || true)"
+  trim_toml_value "${value}"
+}
+
+toml_quote() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf "\"%s\"" "${value}"
+}
+
+upsert_toml_key() {
+  local file="$1"
+  local section="$2"
+  local key="$3"
+  local value="$4"
+  local tmp="${file}.tmp.$$"
+
+  awk -v section="${section}" -v key="${key}" -v value="${value}" '
+    BEGIN {
+      in_section = 0
+      section_seen = 0
+      key_written = 0
+    }
+    function emit_key() {
+      print key " = " value
+    }
+    {
+      if ($0 ~ "^[[:space:]]*\\[" section "\\][[:space:]]*$") {
+        section_seen = 1
+        in_section = 1
+        print $0
+        next
+      }
+      if (in_section && $0 ~ "^[[:space:]]*\\[.*\\][[:space:]]*$") {
+        if (!key_written) {
+          emit_key()
+          key_written = 1
+        }
+        in_section = 0
+        print $0
+        next
+      }
+      if (in_section && $0 ~ "^[[:space:]]*" key "[[:space:]]*=") {
+        if (!key_written) {
+          emit_key()
+          key_written = 1
+        }
+        next
+      }
+      print $0
+    }
+    END {
+      if (!section_seen) {
+        print ""
+        print "[" section "]"
+        emit_key()
+      } else if (in_section && !key_written) {
+        emit_key()
+      }
+    }
+  ' "${file}" > "${tmp}"
+
+  mv "${tmp}" "${file}"
+}
+
+resolve_config_relative_path() {
+  local value="$1"
+  if [[ -z "${value}" ]]; then
+    printf "%s" ""
+    return
+  fi
+  if [[ "${value}" = /* ]]; then
+    printf "%s" "${value}"
+    return
+  fi
+  value="${value#./}"
+  printf "%s" "${CONF_DIR}/${value}"
+}
+
 if [[ -n "${BIN_URL}" ]]; then
   if download_binary_from_url "${BIN_URL}"; then
     echo "Downloaded binary from DATABASA_BIN_URL."
@@ -265,7 +361,7 @@ if [[ -e "${ENV_FILE}" && -L "${ENV_FILE}" ]]; then
   echo "Refusing to use symlinked environment file: ${ENV_FILE}" >&2
   exit 1
 fi
-install -d -m 0750 "${CONF_DIR}" "${DATA_ROOT}" "${DATA_DIR}" "${LOG_DIR}"
+install -d -m 0750 "${CONF_DIR}" "${CERT_DIR}" "${DATA_ROOT}" "${DATA_DIR}" "${LOG_DIR}"
 if [[ -e "${CONF_FILE}" && -L "${CONF_FILE}" ]]; then
   echo "Refusing to use symlinked config file: ${CONF_FILE}" >&2
   exit 1
@@ -289,6 +385,76 @@ else
   fi
 fi
 
+configured_cert="$(read_toml_key "${CONF_FILE}" "tls_cert_file")"
+configured_key="$(read_toml_key "${CONF_FILE}" "tls_key_file")"
+configured_client_auth="$(read_toml_key "${CONF_FILE}" "tls_client_auth")"
+configured_api_key_header="$(read_toml_key "${CONF_FILE}" "api_key_header")"
+
+cert_target="${configured_cert}"
+key_target="${configured_key}"
+if [[ -z "${cert_target}" ]]; then
+  cert_target="${DEFAULT_CERT_FILE}"
+fi
+if [[ -z "${key_target}" ]]; then
+  key_target="${DEFAULT_KEY_FILE}"
+fi
+
+active_cert_file="$(resolve_config_relative_path "${cert_target}")"
+active_key_file="$(resolve_config_relative_path "${key_target}")"
+if [[ -z "${active_cert_file}" || -z "${active_key_file}" ]]; then
+  echo "Unable to resolve TLS cert/key paths from config." >&2
+  exit 1
+fi
+
+cert_exists=0
+key_exists=0
+if [[ -f "${active_cert_file}" ]]; then
+  cert_exists=1
+fi
+if [[ -f "${active_key_file}" ]]; then
+  key_exists=1
+fi
+
+generated_cert=0
+if [[ "${cert_exists}" -eq 1 && "${key_exists}" -eq 1 ]]; then
+  echo "Keeping existing TLS certificate/key:"
+  echo "  cert: ${active_cert_file}"
+  echo "  key:  ${active_key_file}"
+elif [[ "${cert_exists}" -eq 1 || "${key_exists}" -eq 1 ]]; then
+  echo "Refusing to continue: only one of TLS cert/key exists." >&2
+  echo "cert exists=${cert_exists}, key exists=${key_exists}" >&2
+  echo "Fix files or remove both to let installer regenerate them." >&2
+  exit 1
+else
+  echo "Generating default self-signed TLS certificate..."
+  "${INSTALL_BIN}" cert generate -config "${CONF_FILE}" -cert-file "${active_cert_file}" -key-file "${active_key_file}"
+  generated_cert=1
+fi
+
+if [[ -z "${configured_api_key_header}" ]]; then
+  configured_api_key_header="authorization"
+fi
+if [[ -z "${configured_client_auth}" ]]; then
+  configured_client_auth="none"
+fi
+
+upsert_toml_key "${CONF_FILE}" "security" "auth_enabled" "true"
+upsert_toml_key "${CONF_FILE}" "security" "require_auth" "true"
+upsert_toml_key "${CONF_FILE}" "security" "api_key_header" "$(toml_quote "${configured_api_key_header}")"
+upsert_toml_key "${CONF_FILE}" "security" "tls_enabled" "true"
+upsert_toml_key "${CONF_FILE}" "security" "tls_cert_file" "$(toml_quote "${active_cert_file}")"
+upsert_toml_key "${CONF_FILE}" "security" "tls_key_file" "$(toml_quote "${active_key_file}")"
+upsert_toml_key "${CONF_FILE}" "security" "tls_client_auth" "$(toml_quote "${configured_client_auth}")"
+
+if [[ "${generated_cert}" -eq 1 ]]; then
+  install -d -m 0750 "$(dirname "${active_cert_file}")" "$(dirname "${active_key_file}")"
+  chown root:"${SERVICE_GROUP}" "$(dirname "${active_cert_file}")" "$(dirname "${active_key_file}")" || true
+  chown root:"${SERVICE_GROUP}" "${active_cert_file}"
+  chmod 0644 "${active_cert_file}"
+  chown "${SERVICE_USER}:${SERVICE_GROUP}" "${active_key_file}"
+  chmod 0600 "${active_key_file}"
+fi
+
 if [[ ! -f "${ENV_FILE}" ]]; then
   cat > "${ENV_FILE}" <<EOF
 # Databasa service environment
@@ -296,8 +462,9 @@ DATABASA_CONFIG=${CONF_FILE}
 EOF
 fi
 
-chown root:"${SERVICE_GROUP}" "${CONF_DIR}" "${CONF_FILE}" "${ENV_FILE}"
+chown root:"${SERVICE_GROUP}" "${CONF_DIR}" "${CERT_DIR}" "${CONF_FILE}" "${ENV_FILE}"
 chmod 0750 "${CONF_DIR}"
+chmod 0750 "${CERT_DIR}"
 chmod 0640 "${CONF_FILE}"
 chmod 0640 "${ENV_FILE}"
 
@@ -418,3 +585,12 @@ echo "Data: ${DATA_DIR}"
 echo "Runtime dir: /run/${DB_NAME}"
 echo "Logs directory: ${LOG_DIR} (runtime logs are in journald)"
 echo "Helper: ${HELPER_BIN}"
+echo "TLS cert: ${active_cert_file}"
+echo "TLS key: ${active_key_file}"
+echo "TLS mode: enabled by default (security.tls_enabled=true)"
+echo "To replace with CA-signed certs:"
+echo "  1) overwrite ${active_cert_file} and ${active_key_file} with your issued cert/key"
+echo "  2) keep key permissions restricted to ${SERVICE_USER} (chmod 600)"
+echo "  3) restart service: ${DB_NAME} restart"
+echo "To regenerate self-signed certs:"
+echo "  ${INSTALL_BIN} cert generate -config ${CONF_FILE} -cert-file ${active_cert_file} -key-file ${active_key_file} -force"

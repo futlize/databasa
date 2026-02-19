@@ -19,6 +19,7 @@ The project exists to offer a simple-to-operate vector foundation, focused on:
 - Proto: `proto/databasa.proto`
 - Default config: `databasa.toml`
 - Default port: `50051`
+- Authentication: API key required by default
 - Metrics: `COSINE`, `L2`, `DOT_PRODUCT`
 - Main operations: collections, insert/get/delete, batch insert, and search
 
@@ -74,18 +75,23 @@ docker compose up --build -d
 docker compose down
 ```
 
-### 4) Quick smoke test (grpcurl)
+### 4) Quick auth smoke test (grpcurl)
+
+Create an admin API key:
 
 ```bash
-grpcurl -plaintext -d '{"name":"embeddings","dimension":3,"metric":"COSINE"}' \
-  localhost:50051 databasa.Databasa/CreateCollection
-
-grpcurl -plaintext -d '{"collection":"embeddings","key":"doc1","embedding":[0.1,0.2,0.3]}' \
-  localhost:50051 databasa.Databasa/Insert
-
-grpcurl -plaintext -d '{"collection":"embeddings","embedding":[0.1,0.2,0.3],"top_k":5,"ef_search":50}' \
-  localhost:50051 databasa.Databasa/Search
+./bin/databasa auth create-user -config ./databasa.toml -user admin -roles admin
 ```
+
+Then validate login:
+
+```bash
+grpcurl -plaintext -d '{"value":"<API_KEY>"}' \
+  localhost:50051 databasa.Databasa/Login
+```
+
+Databasa sessions are connection-bound, so separate `grpcurl` commands do not reuse authenticated state.
+Use a generated gRPC client and call `Login` once on a long-lived channel before data/admin RPCs.
 
 ## Benchmark (fixed 200k)
 
@@ -95,10 +101,14 @@ The insert benchmark now uses a fixed count of `200000` vectors.
 go run ./cmd/benchmark -embedded=true -workers 4 -batch-size 1000
 ```
 
+Notes:
+- Embedded benchmark now runs with production auth interceptors by default and performs channel `Login` automatically.
+- To explicitly run insecure embedded mode for local dev only, add `-embedded-dev-no-auth=true`.
+
 PowerShell:
 
 ```powershell
-pwsh ./scripts/benchmark.ps1 -Embedded
+go run ./cmd/benchmark -embedded=true -workers 4 -batch-size 1000
 ```
 
 ## Minimal configuration
@@ -141,6 +151,15 @@ max_ef_search = 4096
 max_collection_dim = 8192
 max_data_dir_mb = 0
 require_rpc_deadline = false
+
+[security]
+auth_enabled = true
+require_auth = true
+api_key_header = authorization
+tls_enabled = true
+tls_cert_file = ./certs/server.crt
+tls_key_file = ./certs/server.key
+tls_client_auth = none
 ```
 
 `write_mode`:
@@ -172,6 +191,7 @@ databasa logs --follow
 ## Additional documentation
 
 - Detailed API: `README.API.md`
+- Security guide: `SECURITY.md`
 - Linux service: `docs/LINUX_SERVICE.md`
 - Linux configuration: `README.SERVER.CONFIG.LINUX.md`
 - Internal architecture: `ARCHITECTURE.md`

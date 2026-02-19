@@ -27,6 +27,19 @@ func TestLoadOrCreateConfigCreatesDefaultFile(t *testing.T) {
 	if cfg.Storage.DataDir != defaults.Storage.DataDir {
 		t.Fatalf("unexpected default data dir: got=%q want=%q", cfg.Storage.DataDir, defaults.Storage.DataDir)
 	}
+	if !cfg.Security.AuthEnabled || !cfg.Security.RequireAuth {
+		t.Fatalf("expected auth defaults enabled+required, got auth_enabled=%t require_auth=%t", cfg.Security.AuthEnabled, cfg.Security.RequireAuth)
+	}
+}
+
+func TestDefaultAppConfigSecurityIsFailClosed(t *testing.T) {
+	cfg := DefaultAppConfig()
+	if !cfg.Security.AuthEnabled {
+		t.Fatalf("expected auth_enabled=true by default")
+	}
+	if !cfg.Security.RequireAuth {
+		t.Fatalf("expected require_auth=true by default")
+	}
 }
 
 func TestLoadOrCreateConfigMergesWithDefaults(t *testing.T) {
@@ -42,6 +55,11 @@ write_mode = performance
 [guardrails]
 max_top_k = 42 # max returned docs
 max_data_dir_mb = 256
+
+[security]
+api_key_header = x-api-key
+tls_enabled = true
+tls_client_auth = require
 `
 	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -74,6 +92,15 @@ max_data_dir_mb = 256
 	if cfg.Guardrails.MaxBatchSize != defaults.Guardrails.MaxBatchSize {
 		t.Fatalf("expected default max_batch_size=%d, got=%d", defaults.Guardrails.MaxBatchSize, cfg.Guardrails.MaxBatchSize)
 	}
+	if cfg.Security.APIKeyHeader != "x-api-key" {
+		t.Fatalf("unexpected api_key_header: %q", cfg.Security.APIKeyHeader)
+	}
+	if !cfg.Security.TLSEnabled {
+		t.Fatalf("expected tls_enabled=true")
+	}
+	if cfg.Security.TLSClientAuth != "require" {
+		t.Fatalf("unexpected tls_client_auth: %q", cfg.Security.TLSClientAuth)
+	}
 }
 
 func TestLoadOrCreateConfigNormalizesInvalidWriteMode(t *testing.T) {
@@ -82,6 +109,9 @@ func TestLoadOrCreateConfigNormalizesInvalidWriteMode(t *testing.T) {
 [storage]
 write_mode = ultra
 wal_sync_mode = unknown
+
+[security]
+tls_client_auth = mTLS-weird
 `
 	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -100,6 +130,9 @@ wal_sync_mode = unknown
 	}
 	if cfg.Storage.WALSyncMode != "auto" {
 		t.Fatalf("expected normalized wal_sync_mode=auto, got=%q", cfg.Storage.WALSyncMode)
+	}
+	if cfg.Security.TLSClientAuth != "none" {
+		t.Fatalf("expected normalized tls_client_auth=none, got=%q", cfg.Security.TLSClientAuth)
 	}
 }
 
