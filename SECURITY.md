@@ -74,39 +74,41 @@ Anonymous mode does not allow:
 
 To perform `write`/`admin` operations in optional-auth mode, client must still call `Login`.
 
-## 4) User and API Key Management (CLI)
+## 4) User and API Key Management (Interactive CLI)
 
-All commands accept `-config <path>` (default: `databasa.toml` or `DATABASA_CONFIG`).
-
-Create user + first key:
+Open the shell:
 
 ```bash
-databasa auth create-user -user admin -roles admin -key-name primary
+databasa --cli --addr 127.0.0.1:50051 --tls off
 ```
 
-Create additional key (rotation):
+The interactive shell now connects and prompts authentication at startup when auth is required.
+You can still use `\login <username>` manually after `\logout` or connection changes.
 
-```bash
-databasa auth create-key -user admin -key-name rotate-2026-02
+Manage users from inside the shell:
+
+```sql
+CREATE USER admin PASSWORD ['change-me'] ADMIN;
+ALTER USER admin PASSWORD ['new-secret'];
+DROP USER tempuser;
+LIST USERS;
 ```
 
-Revoke key permanently:
+In CLI grammar, `PASSWORD ['<value>']` is used as the API key secret.
+When `'<value>'` is omitted, CLI prompts for the secret with hidden input and confirmation.
+The resulting token format remains:
 
-```bash
-databasa auth revoke-key -user admin -key-id <KEY_ID>
-```
-
-Disable / enable key:
-
-```bash
-databasa auth disable-key -user admin -key-id <KEY_ID>
-databasa auth enable-key -user admin -key-id <KEY_ID>
+```text
+dbs1.<key_id>.<secret>
 ```
 
 Notes:
-- generated API keys are shown once
-- keep plaintext keys in a secret manager
-- Databasa stores only salted hash material
+- user/admin management commands are exposed in interactive CLI mode
+- for a brand-new auth store, the first `CREATE USER ... ADMIN` runs in bootstrap mode
+- key creation/rotation commands print the generated API key once
+- statements containing `PASSWORD` are excluded from CLI history persistence
+- API keys are still validated by the server in `dbs1.<key_id>.<secret>` format
+- Databasa stores only salted hash material in `auth.json`
 
 ## 5) TLS / mTLS Configuration
 

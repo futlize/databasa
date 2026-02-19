@@ -30,10 +30,18 @@ func main() {
 
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "auth":
-			if err := runAuthCommand(os.Args[2:]); err != nil {
-				log.Fatalf("auth command failed: %v", err)
+		case "--cli":
+			if err := runCLI(os.Args[2:]); err != nil {
+				log.Fatalf("cli mode failed: %v", err)
 			}
+			return
+		case "cli":
+			if err := runCLI(os.Args[2:]); err != nil {
+				log.Fatalf("cli mode failed: %v", err)
+			}
+			return
+		case "auth":
+			log.Fatalf("auth command is disabled; use `databasa --cli` and run CREATE/ALTER/DROP/LIST USER commands")
 			return
 		case "cert":
 			if err := runCertCommand(os.Args[2:]); err != nil {

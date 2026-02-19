@@ -89,6 +89,14 @@ databasa restart         # <dbname> restart
 databasa logs --follow   # <dbname> logs --follow
 ```
 
+Important:
+- `/usr/local/bin/databasa` installed by `scripts/install.sh` is the **service helper** (status/start/stop/logs).
+- To run the interactive database CLI shell, use the real binary path:
+
+```bash
+sudo /usr/local/lib/databasa/databasa --cli --addr 127.0.0.1:50051 --tls on --insecure
+```
+
 ## Uninstallation
 
 Remove service and binaries (keeps config/data/log dir):

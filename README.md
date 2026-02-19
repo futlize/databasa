@@ -75,23 +75,44 @@ docker compose up --build -d
 docker compose down
 ```
 
-### 4) Quick auth smoke test (grpcurl)
+### 4) Interactive CLI quickstart
 
-Create an admin API key:
-
-```bash
-./bin/databasa auth create-user -config ./databasa.toml -user admin -roles admin
-```
-
-Then validate login:
+Start the server:
 
 ```bash
-grpcurl -plaintext -d '{"value":"<API_KEY>"}' \
-  localhost:50051 databasa.Databasa/Login
+./bin/databasa -config ./databasa.toml
 ```
 
-Databasa sessions are connection-bound, so separate `grpcurl` commands do not reuse authenticated state.
-Use a generated gRPC client and call `Login` once on a long-lived channel before data/admin RPCs.
+In another terminal, open the interactive shell:
+
+```bash
+./bin/databasa --cli --addr 127.0.0.1:50051 --tls off
+```
+
+On startup, the CLI connects immediately.
+
+- If auth is required and users already exist, it prompts credentials before opening the prompt.
+- If the auth store is empty, it enters bootstrap flow and creates the first admin user interactively.
+
+Example bootstrap flow:
+
+```text
+No users found in auth store. Bootstrap initial admin user.
+admin user: admin
+admin password:
+confirm password:
+bootstrap admin admin created and authenticated
+key id: 71560500497eb51d2ecc
+api key (shown once): dbs1.71560500497eb51d2ecc.<secret>
+store this api key securely. Databasa never stores plaintext keys.
+```
+
+`PASSWORD ['<value>']` in CLI user commands is the API key secret.
+If `'<value>'` is omitted, the CLI asks for the secret in hidden input and confirmation.
+Generated keys follow: `dbs1.<key_id>.<secret>`.
+Statements containing `PASSWORD` are not stored in CLI history.
+
+Databasa sessions are connection-bound, so each new channel must run `Login` again.
 
 ## Benchmark (fixed 200k)
 
@@ -192,6 +213,7 @@ databasa logs --follow
 
 - Detailed API: `README.API.md`
 - Security guide: `SECURITY.md`
+- Interactive CLI: `docs/cli.md`
 - Linux service: `docs/LINUX_SERVICE.md`
 - Linux configuration: `README.SERVER.CONFIG.LINUX.md`
 - Internal architecture: `ARCHITECTURE.md`
