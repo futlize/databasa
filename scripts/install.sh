@@ -556,18 +556,6 @@ Commands:
 USAGE
 }
 
-has_config_flag() {
-  local arg
-  for arg in "\$@"; do
-    case "\${arg}" in
-      -config|--config|-config=*|--config=*)
-        return 0
-        ;;
-    esac
-  done
-  return 1
-}
-
 cmd="\${1:-}"
 case "\${cmd}" in
   status)
@@ -594,11 +582,7 @@ case "\${cmd}" in
     fi
     ;;
   --cli|cli)
-    if has_config_flag "\$@"; then
-      exec "\${REAL_BIN}" "\$@"
-    else
-      exec "\${REAL_BIN}" "\$@" -config "\${CONFIG_FILE}"
-    fi
+    exec "\${REAL_BIN}" "\$@"
     ;;
   cert)
     echo "cert command is not available in helper mode." >&2

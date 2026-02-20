@@ -6,8 +6,8 @@ import (
 )
 
 func TestNormalizeCLITLSArgsBareFlag(t *testing.T) {
-	got := normalizeCLITLSArgs([]string{"--addr", "127.0.0.1:50051", "--tls", "--insecure"})
-	want := []string{"--addr", "127.0.0.1:50051", "--tls=on", "--insecure"}
+	got := normalizeCLITLSArgs([]string{"--port", "50051", "--tls", "--insecure"})
+	want := []string{"--port", "50051", "--tls=on", "--insecure"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected normalization: got=%v want=%v", got, want)
 	}

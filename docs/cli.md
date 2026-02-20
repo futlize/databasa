@@ -17,6 +17,7 @@ After installation/update, open a new shell (or run `newgrp databasa`) once, the
 
 ```bash
 databasa --cli \
+  --port 50051 \
   --timeout 5s \
   --tls on \
   --ca /path/to/ca.crt \
@@ -25,14 +26,15 @@ databasa --cli \
   --insecure
 ```
 
+- `--port <n>`: set loopback server port (CLI connects to `127.0.0.1:<n>`).
 - `--tls on|off`: force TLS mode (`--tls` alone is treated as `on`).
 - `--insecure`: skips TLS verification (local development only).
 - History is persisted per user in the OS config directory under `databasa/cli_history`.
+- CLI does not read `databasa.toml` in interactive mode.
 - The shell connects immediately on startup and, when auth is required, prompts credentials before opening the prompt.
 - If no users exist on the server auth store, startup enters bootstrap flow to create the first admin user.
-- If the configured file cannot be read (for example `/etc/databasa/databasa.toml` permission denied), CLI falls back to local defaults instead of failing:
-  - `127.0.0.1:50051`
-  - TLS/auth enabled by default
+- Default target: `127.0.0.1:50051`.
+- If server uses a non-default port, pass `--port`.
 
 ## Startup flow
 

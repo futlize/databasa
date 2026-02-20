@@ -93,10 +93,10 @@ databasa cli             # same as --cli
 
 Important:
 - `/usr/local/bin/databasa` installed by `scripts/install.sh` proxies service controls and `--cli`/`cli` to the real binary at `/usr/local/lib/databasa/databasa`.
-- For `--cli`, if `-config/--config` is not passed, helper injects `-config /etc/databasa/databasa.toml` automatically.
 - Installer adds the invoking user to group `databasa` to allow `databasa --cli` without sudo.
 - After install/update, start a new shell session (or run `newgrp databasa`) once.
 - CLI connection target is loopback-only (`127.0.0.1`, `localhost`, `[::1]`).
+- CLI uses `127.0.0.1:50051` by default. For non-default server port, use `--port`.
 - For certificate operations, use the real binary directly:
   `/usr/local/lib/databasa/databasa cert ... -config /etc/databasa/databasa.toml`
 

@@ -33,6 +33,8 @@ const (
 	cliFormatTable cliOutputFormat = "table"
 	cliFormatJSON  cliOutputFormat = "json"
 	cliFormatCSV   cliOutputFormat = "csv"
+
+	defaultCLIAddressPort = 50051
 )
 
 type cliConnectionOptions struct {
@@ -43,7 +45,6 @@ type cliConnectionOptions struct {
 	certFile string
 	keyFile  string
 	insecure bool
-	config   string
 }
 
 type cliSession struct {
@@ -73,10 +74,9 @@ func runCLI(args []string) error {
 	flagSet := flag.NewFlagSet("databasa cli", flag.ContinueOnError)
 	flagSet.SetOutput(os.Stdout)
 
-	configPath := flagSet.String("config", resolvedDefaultConfigPath(), "path to databasa.toml")
-	addr := flagSet.String("addr", "", "loopback gRPC address (default 127.0.0.1:<port> from config)")
+	port := flagSet.Int("port", 0, "loopback gRPC port (default 50051)")
 	timeout := flagSet.Duration("timeout", 5*time.Second, "RPC/connect timeout")
-	tlsMode := flagSet.String("tls", "", "transport security: on|off (default from config)")
+	tlsMode := flagSet.String("tls", "", "transport security: on|off (default on)")
 	caFile := flagSet.String("ca", "", "CA bundle file for TLS server verification")
 	certFile := flagSet.String("cert", "", "client certificate file (mTLS)")
 	keyFile := flagSet.String("key", "", "client private key file (mTLS)")
@@ -90,15 +90,10 @@ func runCLI(args []string) error {
 		return fmt.Errorf("unexpected trailing arguments: %s", strings.Join(flagSet.Args(), " "))
 	}
 
-	cfg, _, cfgErr := loadCLIConfig(*configPath)
-	if cfgErr != nil {
-		cfg = defaultCLIConfig()
-		fmt.Fprintf(os.Stderr, "warning: unable to read config %q (%v); using cli defaults (addr=127.0.0.1:50051, tls=on, auth=on)\n", *configPath, cfgErr)
-	}
-
-	targetAddr := strings.TrimSpace(*addr)
-	if targetAddr == "" {
-		targetAddr = fmt.Sprintf("127.0.0.1:%d", cfg.Server.Port)
+	cfg := defaultCLIConfig()
+	targetAddr, err := resolveCLIAddress(*port, defaultCLIAddressPort)
+	if err != nil {
+		return err
 	}
 	if err := validateCLILocalAddress(targetAddr); err != nil {
 		return err
@@ -121,7 +116,6 @@ func runCLI(args []string) error {
 		certFile: strings.TrimSpace(*certFile),
 		keyFile:  strings.TrimSpace(*keyFile),
 		insecure: *insecureMode,
-		config:   *configPath,
 	}
 
 	historyPath, historyErr := resolveCLIHistoryPath()
@@ -131,7 +125,7 @@ func runCLI(args []string) error {
 
 	session := &cliSession{
 		connOpts:     connOpts,
-		authRequired: cfg.Security.AuthEnabled && cfg.Security.RequireAuth,
+		authRequired: true,
 		in:           bufio.NewReader(os.Stdin),
 		out:          os.Stdout,
 		err:          os.Stderr,
@@ -143,6 +137,11 @@ func runCLI(args []string) error {
 	if err := session.connect(); err != nil {
 		return fmt.Errorf("connect %s: %w", session.connOpts.addr, err)
 	}
+	required, err := session.detectAuthRequirement()
+	if err != nil {
+		return err
+	}
+	session.authRequired = required
 	if err := session.prepareSessionAuth(); err != nil {
 		return err
 	}
@@ -200,28 +199,9 @@ func runCLI(args []string) error {
 	}
 }
 
-func loadCLIConfig(path string) (AppConfig, bool, error) {
-	cfg := DefaultAppConfig()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return cfg, false, nil
-		}
-		return cfg, false, fmt.Errorf("read config %q: %w", path, err)
-	}
-	if len(data) > 0 {
-		if err := parseConfig(data, &cfg); err != nil {
-			return cfg, false, fmt.Errorf("parse config %q: %w", path, err)
-		}
-	}
-	cfg.normalize()
-	return cfg, true, nil
-}
-
 func defaultCLIConfig() AppConfig {
 	cfg := DefaultAppConfig()
-	// Service installs run with TLS/auth enabled; this fallback keeps CLI usable
-	// when /etc/databasa/databasa.toml is unreadable for non-root users.
+	// Default CLI behavior is explicit and independent from filesystem config.
 	cfg.Security.TLSEnabled = true
 	cfg.Security.AuthEnabled = true
 	cfg.Security.RequireAuth = true
@@ -237,6 +217,20 @@ func parseCLITLSMode(raw string) (bool, error) {
 	default:
 		return false, fmt.Errorf("invalid --tls value %q (expected on|off)", raw)
 	}
+}
+
+func resolveCLIAddress(port int, defaultPort int) (string, error) {
+	if port < 0 || port > 65535 {
+		return "", fmt.Errorf("invalid --port %d (expected 1..65535)", port)
+	}
+	if port > 0 {
+		return fmt.Sprintf("127.0.0.1:%d", port), nil
+	}
+	basePort := defaultPort
+	if basePort <= 0 {
+		basePort = defaultCLIAddressPort
+	}
+	return fmt.Sprintf("127.0.0.1:%d", basePort), nil
 }
 
 func validateCLILocalAddress(addr string) error {
@@ -866,6 +860,23 @@ func (s *cliSession) ensureConnected() error {
 		return errors.New("not connected to server")
 	}
 	return nil
+}
+
+func (s *cliSession) detectAuthRequirement() (bool, error) {
+	if err := s.ensureConnected(); err != nil {
+		return false, err
+	}
+	ctx, cancel := s.rpcContext()
+	defer cancel()
+	_, err := s.client.ListCollections(ctx, &pb.ListCollectionsRequest{})
+	if err == nil {
+		return false, nil
+	}
+	code := status.Code(err)
+	if code == codes.Unauthenticated {
+		return true, nil
+	}
+	return false, fmt.Errorf("probe auth requirement: %w", err)
 }
 
 type cliUserCreateResult struct {

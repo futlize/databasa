@@ -216,10 +216,11 @@ Open a new shell once (or run `newgrp databasa`) after installation.
 
 ## Additional documentation
 
-- Detailed API: `README.API.md`
+- Detailed API: `docs/README.API.md`
 - Security guide: `SECURITY.md`
 - Interactive CLI: `docs/cli.md`
 - Linux service: `docs/LINUX_SERVICE.md`
-- Linux configuration: `README.SERVER.CONFIG.LINUX.md`
-- Internal architecture: `ARCHITECTURE.md`
+- Linux configuration: `docs/README.SERVER.CONFIG.LINUX.md`
+- Internal architecture: `docs/ARCHITECTURE.md`
+- Additional configuration notes: `docs/CONFIG.md`
 - Performance/benchmarks: `docs/PERFORMANCE.md`

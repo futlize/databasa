@@ -5,4 +5,5 @@ data/
 .env
 dist/
 certs/
+ME.md
 AGENTS.md
