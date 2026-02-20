@@ -10,6 +10,9 @@ databasa --cli
 databasa cli
 ```
 
+On Linux service installs, `scripts/install.sh` grants CLI access to the invoking user by adding it to group `databasa`.
+After installation/update, open a new shell (or run `newgrp databasa`) once, then use `databasa --cli` directly.
+
 ## Connection flags
 
 ```bash
@@ -26,14 +29,14 @@ databasa --cli \
 - `--insecure`: skips TLS verification (local development only).
 - History is persisted per user in the OS config directory under `databasa/cli_history`.
 - The shell connects immediately on startup and, when auth is required, prompts credentials before opening the prompt.
-- If no users exist in the local auth store, startup enters bootstrap flow to create the first admin user.
+- If no users exist on the server auth store, startup enters bootstrap flow to create the first admin user.
 
 ## Startup flow
 
 1. CLI connects to server using the provided flags.
    The target must be loopback (local server only).
 2. If auth is disabled, prompt opens immediately.
-3. If auth is enabled and no users exist in local auth store, bootstrap flow creates first admin user.
+3. If auth is enabled and no users exist on the server, bootstrap flow creates first admin user.
 4. If users already exist, CLI prompts `user` and `password or api key` and authenticates before opening the prompt.
 
 ## Prompt
@@ -65,17 +68,17 @@ Commands support multiline input and execute when terminated with `;`.
 Users (CLI-only admin flow):
 
 ```sql
-CREATE USER <name> PASSWORD ['<pass>'] [ADMIN];
-ALTER USER <name> PASSWORD ['<pass>'];
+CREATE USER <name> PASSWORD [ADMIN];
+ALTER USER <name> PASSWORD;
 DROP USER <name>;
 LIST USERS;
 ```
 
 `CREATE USER` and `ALTER USER ... PASSWORD ...` print the generated API key once.
 
-If `'<pass>'` is omitted, the CLI prompts for the secret with hidden input and confirmation.
+The CLI always prompts for the secret with hidden input and confirmation.
 
-`PASSWORD ['<value>']` is treated as the API key secret in CLI grammar.
+`PASSWORD` is the command keyword for API key secret rotation/creation.
 Generated key format:
 
 ```text

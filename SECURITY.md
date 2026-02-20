@@ -24,7 +24,8 @@ Connection binding details:
 - session map key is `ConnID`, with session data including user id, key id, role mask, created timestamp, and last-seen timestamp
 
 `Login` credential input:
-- preferred: `Login` request payload (`google.protobuf.StringValue.value`)
+- standard API: `databasa.Databasa/Login` payload (`google.protobuf.StringValue.value`) with API key
+- CLI admin API: `databasa.Admin/Login` payload (`username` + `secret`) or `api_key`
 - optional compatibility fallback: gRPC metadata (`authorization: Bearer <API_KEY>` or configured `security.api_key_header`)
 
 Security properties:
@@ -53,7 +54,11 @@ Permission mapping by RPC:
 - `admin`: `CreateCollection`, `DeleteCollection`, `CreateIndex`, `DropIndex`
 
 Special RPC:
-- `Login`: performs authentication handshake and creates/refreshes connection session
+- `Login` (`databasa.Databasa/Login` and `databasa.Admin/Login`): performs authentication handshake and creates/refreshes connection session
+
+Local-only admin RPCs:
+- `databasa.Admin/*` is accepted only from loopback/unix-local peers
+- includes `CreateUser`, `AlterUserPassword`, `DropUser`, `ListUsers`, and `BootstrapStatus`
 
 Rules:
 - `admin` implies all permissions
@@ -82,20 +87,23 @@ Open the shell:
 databasa --cli --tls off
 ```
 
+On Linux service installs, `scripts/install.sh` adds the invoking user to group `databasa`.
+Open a new shell once (or run `newgrp databasa`) to pick up group membership.
+
 The interactive shell now connects and prompts authentication at startup when auth is required.
 You can still use `\login <username>` manually after `\logout` or connection changes.
 
 Manage users from inside the shell:
 
 ```sql
-CREATE USER admin PASSWORD ['change-me'] ADMIN;
-ALTER USER admin PASSWORD ['new-secret'];
+CREATE USER admin PASSWORD ADMIN;
+ALTER USER admin PASSWORD;
 DROP USER tempuser;
 LIST USERS;
 ```
 
-In CLI grammar, `PASSWORD ['<value>']` is used as the API key secret.
-When `'<value>'` is omitted, CLI prompts for the secret with hidden input and confirmation.
+In CLI grammar, `PASSWORD` is used as the API key secret command keyword.
+CLI always prompts for the secret with hidden input and confirmation.
 The resulting token format remains:
 
 ```text
@@ -105,7 +113,7 @@ dbs1.<key_id>.<secret>
 Notes:
 - user/admin management commands are exposed in interactive CLI mode
 - CLI connects only to loopback addresses (`127.0.0.1`, `localhost`, `[::1]`)
-- for a brand-new auth store, the first `CREATE USER ... ADMIN` runs in bootstrap mode
+- for a brand-new server auth store, CLI startup runs bootstrap mode for the first admin
 - key creation/rotation commands print the generated API key once
 - statements containing `PASSWORD` are excluded from CLI history persistence
 - API keys are still validated by the server in `dbs1.<key_id>.<secret>` format
@@ -145,6 +153,14 @@ grpcurl \
   db.example.com:50051 databasa.Databasa/Login
 ```
 
+CLI-style username/password login (local-only admin service):
+
+```bash
+grpcurl \
+  -d '{"username":"admin","secret":"<password>"}' \
+  127.0.0.1:50051 databasa.Admin/Login
+```
+
 Important:
 - sessions are channel-bound, not process-bound
 - each standalone `grpcurl` invocation opens a new connection, so it does not reuse a previous login session
@@ -158,6 +174,12 @@ Built-in self-signed generation:
 
 ```bash
 databasa cert generate -config databasa.toml -cert-file ./certs/server.crt -key-file ./certs/server.key
+```
+
+On Linux service installs, use the real binary path:
+
+```bash
+/usr/local/lib/databasa/databasa cert generate -config /etc/databasa/databasa.toml -force
 ```
 
 Regenerate (overwrite):

@@ -33,6 +33,8 @@ CONF_FILE="${CONF_DIR}/${DB_NAME}.toml"
 ENV_FILE="/etc/default/${DB_NAME}"
 DATA_ROOT="/var/lib/${DB_NAME}"
 DATA_DIR="${DATA_ROOT}/data"
+SECURITY_DIR="${DATA_DIR}/security"
+AUTH_STORE="${SECURITY_DIR}/auth.json"
 LOG_DIR="/var/log/${DB_NAME}"
 CERT_DIR="${CONF_DIR}/certs"
 DEFAULT_CERT_FILE="${CERT_DIR}/server.crt"
@@ -56,6 +58,7 @@ fi
 BIN_TO_INSTALL=""
 TMP_BIN=""
 TMP_DIR=""
+CLI_USER_ADDED_TO_GROUP=0
 
 cleanup() {
   if [[ -n "${TMP_BIN}" && -f "${TMP_BIN}" ]]; then
@@ -346,6 +349,15 @@ if ! id -u "${SERVICE_USER}" >/dev/null 2>&1; then
     "${SERVICE_USER}"
 fi
 
+if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" && "${SUDO_USER}" != "${SERVICE_USER}" ]]; then
+  if id -nG "${SUDO_USER}" 2>/dev/null | tr ' ' '\n' | grep -qx "${SERVICE_GROUP}"; then
+    :
+  else
+    usermod -a -G "${SERVICE_GROUP}" "${SUDO_USER}"
+    CLI_USER_ADDED_TO_GROUP=1
+  fi
+fi
+
 install -d -m 0755 /usr/local/bin "${INSTALL_ROOT}"
 install -m 0755 "${BIN_TO_INSTALL}" "${INSTALL_BIN}"
 
@@ -470,6 +482,12 @@ chmod 0640 "${ENV_FILE}"
 
 chown -R "${SERVICE_USER}:${SERVICE_GROUP}" "${DATA_ROOT}" "${LOG_DIR}"
 chmod 0750 "${DATA_ROOT}" "${DATA_DIR}" "${LOG_DIR}"
+install -d -m 2770 "${SECURITY_DIR}"
+chown "${SERVICE_USER}:${SERVICE_GROUP}" "${SECURITY_DIR}"
+chmod 2770 "${SECURITY_DIR}"
+if [[ -f "${AUTH_STORE}" ]]; then
+  chmod 0640 "${AUTH_STORE}" || true
+fi
 
 cat > "${SERVICE_FILE}" <<EOF
 [Unit]
@@ -535,7 +553,6 @@ Commands:
   logs [--follow]
   --cli [flags]
   cli [flags]
-  cert <subcommand> [flags]
 USAGE
 }
 
@@ -576,11 +593,18 @@ case "\${cmd}" in
       run_root_cmd journalctl -u "\${SERVICE_NAME}" -n 200 --no-pager
     fi
     ;;
-  --cli|cli|cert)
+  --cli|cli)
     if has_config_flag "\$@"; then
       exec "\${REAL_BIN}" "\$@"
+    else
+      exec "\${REAL_BIN}" "\$@" -config "\${CONFIG_FILE}"
     fi
-    exec "\${REAL_BIN}" "\$@" -config "\${CONFIG_FILE}"
+    ;;
+  cert)
+    echo "cert command is not available in helper mode." >&2
+    echo "Use the real binary directly:" >&2
+    echo "  \${REAL_BIN} cert ... -config \${CONFIG_FILE}" >&2
+    exit 1
     ;;
   *)
     usage
@@ -617,3 +641,7 @@ echo "  2) keep key permissions restricted to ${SERVICE_USER} (chmod 600)"
 echo "  3) restart service: ${DB_NAME} restart"
 echo "To regenerate self-signed certs:"
 echo "  ${INSTALL_BIN} cert generate -config ${CONF_FILE} -cert-file ${active_cert_file} -key-file ${active_key_file} -force"
+if [[ "${CLI_USER_ADDED_TO_GROUP}" -eq 1 ]]; then
+  echo "CLI access granted: user '${SUDO_USER}' added to group '${SERVICE_GROUP}'."
+  echo "Open a new shell session (or run: newgrp ${SERVICE_GROUP}) to use '${DB_NAME} --cli' without sudo."
+fi

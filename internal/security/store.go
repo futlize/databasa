@@ -170,7 +170,7 @@ func saveIdentityStore(path string, store identityStore) error {
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("replace auth store: %w", err)
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	if err := os.Chmod(path, 0o640); err != nil {
 		return fmt.Errorf("set auth store permissions: %w", err)
 	}
 

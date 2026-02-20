@@ -7,17 +7,21 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/futlize/databasa/internal/adminapi"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/stats"
 	"google.golang.org/grpc/status"
+	structpb "google.golang.org/protobuf/types/known/structpb"
 )
 
 type principalContextKey struct{}
@@ -25,6 +29,7 @@ type connectionContextKey struct{}
 
 const loginRPCFullMethod = "/databasa.Databasa/Login"
 const authServiceLoginRPCFullMethod = "/databasa.AuthService/Login"
+const adminServiceMethodPrefix = "/" + adminapi.ServiceName + "/"
 
 type compiledKey struct {
 	hash         [32]byte
@@ -90,6 +95,12 @@ var methodPermissions = map[string]Permission{
 	"/databasa.Databasa/DeleteCollection": PermissionAdmin,
 	"/databasa.Databasa/CreateIndex":      PermissionAdmin,
 	"/databasa.Databasa/DropIndex":        PermissionAdmin,
+
+	adminapi.FullMethodCreateUser:        PermissionAdmin,
+	adminapi.FullMethodAlterUserPassword: PermissionAdmin,
+	adminapi.FullMethodDropUser:          PermissionAdmin,
+	adminapi.FullMethodListUsers:         PermissionAdmin,
+	adminapi.FullMethodBootstrapStatus:   PermissionAdmin,
 }
 
 func NormalizeAuthConfig(cfg AuthConfig) AuthConfig {
@@ -224,13 +235,42 @@ func (a *Authenticator) StreamServerInterceptor() grpc.StreamServerInterceptor {
 }
 
 func (a *Authenticator) authorizeUnary(ctx context.Context, fullMethod string, req any) (context.Context, error) {
+	if isAdminMethod(fullMethod) && !isLocalPeer(ctx) {
+		return nil, status.Error(codes.PermissionDenied, "admin RPCs are local-only")
+	}
 	if isLoginMethod(fullMethod) {
 		return a.authorizeLogin(ctx, req)
+	}
+	if fullMethod == adminapi.FullMethodBootstrapStatus {
+		authorizedCtx, err := a.authorizeEstablishedSession(ctx, fullMethod)
+		if err == nil {
+			return authorizedCtx, nil
+		}
+		if status.Code(err) == codes.Unauthenticated {
+			return ctx, nil
+		}
+		return nil, err
+	}
+	if fullMethod == adminapi.FullMethodCreateUser {
+		authorizedCtx, err := a.authorizeEstablishedSession(ctx, fullMethod)
+		if err == nil {
+			return authorizedCtx, nil
+		}
+		if status.Code(err) != codes.Unauthenticated {
+			return nil, err
+		}
+		if !a.allowBootstrapCreateUser(req) {
+			return nil, err
+		}
+		return ctx, nil
 	}
 	return a.authorizeEstablishedSession(ctx, fullMethod)
 }
 
 func (a *Authenticator) authorizeStream(ctx context.Context, fullMethod string) (context.Context, error) {
+	if isAdminMethod(fullMethod) && !isLocalPeer(ctx) {
+		return nil, status.Error(codes.PermissionDenied, "admin RPCs are local-only")
+	}
 	if isLoginMethod(fullMethod) {
 		return nil, status.Error(codes.Unimplemented, "Login is unary-only")
 	}
@@ -248,7 +288,7 @@ func (a *Authenticator) authorizeLogin(ctx context.Context, req any) (context.Co
 		return nil, status.Error(codes.Unauthenticated, "connection authentication context unavailable")
 	}
 
-	token, err := extractLoginCredentialToken(ctx, req, a.apiKeyKey)
+	token, err := extractLoginCredentialToken(ctx, req, a.apiKeyKey, a.currentState())
 	if err != nil {
 		if errors.Is(err, errNoCredentials) {
 			return nil, status.Error(codes.Unauthenticated, "api key is required for Login")
@@ -296,6 +336,14 @@ func (a *Authenticator) authorizeEstablishedSession(ctx context.Context, fullMet
 
 func (a *Authenticator) allowAnonymous(required Permission) bool {
 	return !a.requireAuth && required == PermissionRead
+}
+
+func (a *Authenticator) allowBootstrapCreateUser(req any) bool {
+	if !createUserBootstrapRequested(req) {
+		return false
+	}
+	state := a.currentState()
+	return state != nil && len(state.keys) == 0
 }
 
 type authenticatedPrincipal struct {
@@ -430,14 +478,17 @@ func extractCredentialToken(ctx context.Context, headerKey string) (string, erro
 	return "", errNoCredentials
 }
 
-func extractLoginCredentialToken(ctx context.Context, req any, headerKey string) (string, error) {
-	if token, ok := tokenFromLoginRequest(req); ok {
+func extractLoginCredentialToken(ctx context.Context, req any, headerKey string, state *compiledState) (string, error) {
+	if token, ok := tokenFromLoginRequest(req, state); ok {
 		return token, nil
+	}
+	if loginCredentialProvided(req) {
+		return "", errors.New("invalid login credential")
 	}
 	return extractCredentialToken(ctx, headerKey)
 }
 
-func tokenFromLoginRequest(req any) (string, bool) {
+func tokenFromLoginRequest(req any, state *compiledState) (string, bool) {
 	if req == nil {
 		return "", false
 	}
@@ -451,7 +502,90 @@ func tokenFromLoginRequest(req any) (string, bool) {
 			return token, true
 		}
 	}
+	if reqStruct, ok := req.(*structpb.Struct); ok {
+		if token, ok := tokenFromStructField(reqStruct, "api_key"); ok {
+			return token, true
+		}
+		if token, ok := tokenFromStructField(reqStruct, "value"); ok {
+			return token, true
+		}
+		if token, ok := tokenFromUsernameSecret(reqStruct, state); ok {
+			return token, true
+		}
+	}
 	return "", false
+}
+
+func loginCredentialProvided(req any) bool {
+	if req == nil {
+		return false
+	}
+	if withValue, ok := req.(interface{ GetValue() string }); ok {
+		if strings.TrimSpace(withValue.GetValue()) != "" {
+			return true
+		}
+	}
+	if withAPIKey, ok := req.(interface{ GetApiKey() string }); ok {
+		if strings.TrimSpace(withAPIKey.GetApiKey()) != "" {
+			return true
+		}
+	}
+	if reqStruct, ok := req.(*structpb.Struct); ok {
+		for _, key := range []string{"api_key", "value", "username", "secret"} {
+			if strings.TrimSpace(structStringField(reqStruct, key)) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func tokenFromStructField(req *structpb.Struct, field string) (string, bool) {
+	if req == nil {
+		return "", false
+	}
+	value := req.GetFields()[field]
+	if value == nil {
+		return "", false
+	}
+	return extractTokenValue(value.GetStringValue())
+}
+
+func tokenFromUsernameSecret(req *structpb.Struct, state *compiledState) (string, bool) {
+	if req == nil || state == nil {
+		return "", false
+	}
+	user := strings.TrimSpace(structStringField(req, "username"))
+	secret := strings.TrimSpace(structStringField(req, "secret"))
+	if user == "" || secret == "" {
+		return "", false
+	}
+
+	for _, candidate := range state.keys {
+		if candidate.userDisabled || candidate.keyDisabled || candidate.keyRevoked {
+			continue
+		}
+		if candidate.principal.UserName != user {
+			continue
+		}
+		sum := hashSecret(secret, candidate.salt)
+		if subtle.ConstantTimeCompare(sum[:], candidate.hash[:]) == 1 {
+			return formatAPIKey(candidate.principal.KeyID, secret), true
+		}
+	}
+	state.burnCredential(secret)
+	return "", false
+}
+
+func structStringField(req *structpb.Struct, field string) string {
+	if req == nil {
+		return ""
+	}
+	value := req.GetFields()[field]
+	if value == nil {
+		return ""
+	}
+	return value.GetStringValue()
 }
 
 func extractTokenValue(value string) (string, bool) {
@@ -618,5 +752,60 @@ func generateConnID() (string, error) {
 }
 
 func isLoginMethod(fullMethod string) bool {
-	return fullMethod == loginRPCFullMethod || fullMethod == authServiceLoginRPCFullMethod
+	return fullMethod == loginRPCFullMethod ||
+		fullMethod == authServiceLoginRPCFullMethod ||
+		fullMethod == adminapi.FullMethodLogin
+}
+
+func isAdminMethod(fullMethod string) bool {
+	return strings.HasPrefix(fullMethod, adminServiceMethodPrefix)
+}
+
+func createUserBootstrapRequested(req any) bool {
+	in, ok := req.(*structpb.Struct)
+	if !ok || in == nil {
+		return false
+	}
+	value := in.GetFields()["admin"]
+	if value == nil {
+		return false
+	}
+	switch kind := value.Kind.(type) {
+	case *structpb.Value_BoolValue:
+		return kind.BoolValue
+	case *structpb.Value_StringValue:
+		switch strings.ToLower(strings.TrimSpace(kind.StringValue)) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+	case *structpb.Value_NumberValue:
+		return kind.NumberValue != 0
+	}
+	return false
+}
+
+func isLocalPeer(ctx context.Context) bool {
+	info, ok := peer.FromContext(ctx)
+	if !ok || info.Addr == nil {
+		return false
+	}
+	switch info.Addr.(type) {
+	case *net.UnixAddr:
+		return true
+	}
+
+	addr := strings.TrimSpace(info.Addr.String())
+	if addr == "" {
+		return false
+	}
+	host := addr
+	if parsedHost, _, err := net.SplitHostPort(addr); err == nil {
+		host = parsedHost
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

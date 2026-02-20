@@ -94,12 +94,12 @@ CLI targets are loopback-only (`127.0.0.1`/`localhost`/`::1`).
 On startup, the CLI connects immediately.
 
 - If auth is required and users already exist, it prompts credentials before opening the prompt.
-- If the auth store is empty, it enters bootstrap flow and creates the first admin user interactively.
+- If the server has no users yet, it enters bootstrap flow and creates the first admin user interactively.
 
 Example bootstrap flow:
 
 ```text
-No users found in auth store. Bootstrap initial admin user.
+No users found. Bootstrap initial admin user.
 admin user: admin
 admin password:
 confirm password:
@@ -109,8 +109,7 @@ api key (shown once): dbs1.71560500497eb51d2ecc.<secret>
 store this api key securely. Databasa never stores plaintext keys.
 ```
 
-`PASSWORD ['<value>']` in CLI user commands is the API key secret.
-If `'<value>'` is omitted, the CLI asks for the secret in hidden input and confirmation.
+In CLI user commands, `PASSWORD` always triggers a hidden prompt for the API key secret.
 Generated keys follow: `dbs1.<key_id>.<secret>`.
 Statements containing `PASSWORD` are not stored in CLI history.
 
@@ -209,7 +208,11 @@ go build -o ./bin/databasa ./cmd/databasa
 sudo ./scripts/install.sh
 databasa status
 databasa logs --follow
+databasa --cli --insecure
 ```
+
+In Linux service mode, installer adds the invoking user to group `databasa` for CLI access.
+Open a new shell once (or run `newgrp databasa`) after installation.
 
 ## Additional documentation
 

@@ -577,14 +577,10 @@ func (p *cliCommandParser) expectString() (string, error) {
 }
 
 func (p *cliCommandParser) parseOptionalPasswordLiteral() (string, bool, error) {
-	if p.peek().kind != cliTokenString {
-		return "", true, nil
+	if p.peek().kind == cliTokenString {
+		return "", false, errors.New("inline PASSWORD literal is disabled; omit value after PASSWORD to enter secret securely")
 	}
-	value, err := p.expectString()
-	if err != nil {
-		return "", false, err
-	}
-	return value, false, nil
+	return "", true, nil
 }
 
 func (p *cliCommandParser) expectInt() (int, error) {

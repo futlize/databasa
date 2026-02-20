@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/futlize/databasa/internal/security"
+	"github.com/futlize/databasa/internal/adminapi"
 	pb "github.com/futlize/databasa/pkg/pb"
 	"golang.org/x/term"
 	"google.golang.org/grpc"
@@ -23,7 +23,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/wrapperspb"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
+	structpb "google.golang.org/protobuf/types/known/structpb"
 )
 
 type cliOutputFormat string
@@ -35,15 +36,14 @@ const (
 )
 
 type cliConnectionOptions struct {
-	addr      string
-	timeout   time.Duration
-	tls       bool
-	caFile    string
-	certFile  string
-	keyFile   string
-	insecure  bool
-	config    string
-	authStore string
+	addr     string
+	timeout  time.Duration
+	tls      bool
+	caFile   string
+	certFile string
+	keyFile  string
+	insecure bool
+	config   string
 }
 
 type cliSession struct {
@@ -56,8 +56,6 @@ type cliSession struct {
 
 	conn   *grpc.ClientConn
 	client pb.DatabasaClient
-
-	manager *security.Manager
 
 	currentCollection string
 	format            cliOutputFormat
@@ -115,15 +113,14 @@ func runCLI(args []string) error {
 	}
 
 	connOpts := cliConnectionOptions{
-		addr:      targetAddr,
-		timeout:   *timeout,
-		tls:       tlsEnabled,
-		caFile:    strings.TrimSpace(*caFile),
-		certFile:  strings.TrimSpace(*certFile),
-		keyFile:   strings.TrimSpace(*keyFile),
-		insecure:  *insecureMode,
-		config:    *configPath,
-		authStore: security.AuthStorePath(cfg.Storage.DataDir),
+		addr:     targetAddr,
+		timeout:  *timeout,
+		tls:      tlsEnabled,
+		caFile:   strings.TrimSpace(*caFile),
+		certFile: strings.TrimSpace(*certFile),
+		keyFile:  strings.TrimSpace(*keyFile),
+		insecure: *insecureMode,
+		config:   *configPath,
 	}
 
 	historyPath, historyErr := resolveCLIHistoryPath()
@@ -137,7 +134,6 @@ func runCLI(args []string) error {
 		in:           bufio.NewReader(os.Stdin),
 		out:          os.Stdout,
 		err:          os.Stderr,
-		manager:      security.NewManager(connOpts.authStore),
 		format:       cliFormatTable,
 		historyPath:  historyPath,
 	}
@@ -262,11 +258,11 @@ func (s *cliSession) prepareSessionAuth() error {
 		return nil
 	}
 
-	records, err := s.manager.ListUsers()
+	hasUsers, err := s.bootstrapHasUsers()
 	if err != nil {
-		return fmt.Errorf("load local auth store %q: %w", s.connOpts.authStore, err)
+		return err
 	}
-	if len(records) == 0 {
+	if !hasUsers {
 		return s.bootstrapInitialAdmin()
 	}
 
@@ -291,7 +287,7 @@ func (s *cliSession) prepareSessionAuth() error {
 }
 
 func (s *cliSession) bootstrapInitialAdmin() error {
-	fmt.Fprintln(s.out, "No users found in auth store. Bootstrap initial admin user.")
+	fmt.Fprintln(s.out, "No users found. Bootstrap initial admin user.")
 	userName, err := promptLine(s.in, s.out, "admin user: ")
 	if err != nil {
 		return err
@@ -316,16 +312,16 @@ func (s *cliSession) bootstrapInitialAdmin() error {
 		return errors.New("admin password cannot be empty")
 	}
 
-	_, generated, err := s.manager.CreateUserWithPassword(userName, []security.Role{security.RoleAdmin}, "primary", password)
+	created, err := s.adminCreateUser(userName, password, true)
 	if err != nil {
 		return fmt.Errorf("bootstrap create admin user: %w", err)
 	}
-	if err := s.loginWithToken(userName, generated.Plaintext, false); err != nil {
+	if err := s.loginWithSecret(userName, password, false); err != nil {
 		return fmt.Errorf("bootstrap login failed: %w", err)
 	}
 	fmt.Fprintf(s.out, "bootstrap admin %s created and authenticated\n", userName)
-	fmt.Fprintf(s.out, "key id: %s\n", generated.KeyID)
-	fmt.Fprintf(s.out, "api key (shown once): %s\n", generated.Plaintext)
+	fmt.Fprintf(s.out, "key id: %s\n", created.keyID)
+	fmt.Fprintf(s.out, "api key (shown once): %s\n", created.apiKey)
 	fmt.Fprintln(s.out, "store this api key securely. Databasa never stores plaintext keys.")
 	return nil
 }
@@ -572,11 +568,11 @@ func (s *cliSession) printHelp() {
   \format table|json|csv
 
 Core commands (terminate with ';'):
-  CREATE USER <name> PASSWORD ['<pass>'] [ADMIN];
-  ALTER USER <name> PASSWORD ['<pass>'];
+  CREATE USER <name> PASSWORD [ADMIN];
+  ALTER USER <name> PASSWORD;
   DROP USER <name>;
   LIST USERS;
-  (omit '<pass>' to enter the secret in a hidden prompt)
+  (secret is always entered via hidden prompt)
 
   CREATE COLLECTION <name> DIM <n> [METRIC cosine|dot|l2];
   DROP COLLECTION <name>;
@@ -622,7 +618,7 @@ func (s *cliSession) connect() error {
 	s.loggedAdmin = false
 	s.authToken = ""
 	if strings.TrimSpace(previousToken) != "" && strings.TrimSpace(previousUser) != "" {
-		if err := s.loginWithToken(previousUser, previousToken, false); err != nil {
+		if err := s.loginWithSecret(previousUser, previousToken, false); err != nil {
 			s.loggedUser = ""
 			s.loggedAdmin = false
 			s.authToken = ""
@@ -676,7 +672,7 @@ func (s *cliSession) login(userName string) error {
 		return errors.New("usage: \\login <username>")
 	}
 
-	secret, err := promptHidden("password: ")
+	secret, err := promptHidden("password or api key: ")
 	if err != nil {
 		return err
 	}
@@ -688,49 +684,49 @@ func (s *cliSession) login(userName string) error {
 }
 
 func (s *cliSession) loginWithSecret(userName, secret string, verbose bool) error {
-	candidates := make([]string, 0, 4)
 	if strings.HasPrefix(secret, "dbs1.") {
-		candidates = append(candidates, secret)
+		return s.loginWithToken(userName, secret, verbose)
 	}
-
-	keyIDs, keyErr := s.manager.ActiveKeyIDsForUser(userName)
-	if keyErr == nil {
-		for _, keyID := range keyIDs {
-			candidates = append(candidates, fmt.Sprintf("dbs1.%s.%s", keyID, secret))
-		}
-	}
-	if len(candidates) == 0 {
-		return fmt.Errorf("unable to resolve login token for user %q", userName)
-	}
-	return s.loginWithCandidateTokens(userName, candidates, verbose)
-}
-
-func (s *cliSession) loginWithCandidateTokens(userName string, candidates []string, verbose bool) error {
-	var lastErr error
-	for _, token := range candidates {
-		callErr := s.loginWithToken(userName, token, verbose)
-		if callErr == nil {
-			return nil
-		}
-		lastErr = callErr
-		if status.Code(callErr) != codes.Unauthenticated && status.Code(callErr) != codes.PermissionDenied {
-			return callErr
-		}
-	}
-	return lastErr
+	return s.loginWithCredentials(userName, secret, verbose)
 }
 
 func (s *cliSession) loginWithToken(userName, token string, verbose bool) error {
+	return s.loginWithPayload(userName, map[string]any{
+		"api_key": token,
+	}, verbose)
+}
+
+func (s *cliSession) loginWithCredentials(userName, secret string, verbose bool) error {
+	return s.loginWithPayload(userName, map[string]any{
+		"username": userName,
+		"secret":   secret,
+	}, verbose)
+}
+
+func (s *cliSession) loginWithPayload(userName string, payload map[string]any, verbose bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), s.connOpts.timeout)
 	defer cancel()
 
-	_, err := s.client.Login(ctx, &wrapperspb.StringValue{Value: token})
+	body, err := structpb.NewStruct(payload)
 	if err != nil {
 		return err
 	}
+	if err := s.conn.Invoke(ctx, adminapi.FullMethodLogin, body, &emptypb.Empty{}); err != nil {
+		return err
+	}
+	rememberedSecret := ""
+	if apiKey, ok := payload["api_key"].(string); ok {
+		rememberedSecret = strings.TrimSpace(apiKey)
+	} else if secret, ok := payload["secret"].(string); ok {
+		rememberedSecret = strings.TrimSpace(secret)
+	}
+	s.loggedAdmin = false
+	if isAdmin, adminErr := s.detectAdminStatus(); adminErr == nil {
+		s.loggedAdmin = isAdmin
+	}
+
 	s.loggedUser = userName
-	s.loggedAdmin = s.isLocalAdmin(userName)
-	s.authToken = token
+	s.authToken = rememberedSecret
 	if verbose {
 		fmt.Fprintf(s.out, "login ok for %s\n", userName)
 		if s.loggedAdmin {
@@ -738,6 +734,23 @@ func (s *cliSession) loginWithToken(userName, token string, verbose bool) error 
 		}
 	}
 	return nil
+}
+
+func (s *cliSession) detectAdminStatus() (bool, error) {
+	if s.conn == nil {
+		return false, errors.New("not connected to server")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.connOpts.timeout)
+	defer cancel()
+	var out structpb.Struct
+	err := s.conn.Invoke(ctx, adminapi.FullMethodListUsers, &emptypb.Empty{}, &out)
+	if err != nil {
+		if status.Code(err) == codes.PermissionDenied || status.Code(err) == codes.Unauthenticated {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *cliSession) logout() error {
@@ -748,6 +761,9 @@ func (s *cliSession) logout() error {
 		fmt.Fprintln(s.out, "logged out")
 		return nil
 	}
+	s.loggedUser = ""
+	s.loggedAdmin = false
+	s.authToken = ""
 	if err := s.connect(); err != nil {
 		return err
 	}
@@ -763,24 +779,6 @@ func promptHidden(prompt string) (string, error) {
 		return "", fmt.Errorf("read hidden input: %w", err)
 	}
 	return string(secret), nil
-}
-
-func (s *cliSession) isLocalAdmin(userName string) bool {
-	records, err := s.manager.ListUsers()
-	if err != nil {
-		return false
-	}
-	for _, record := range records {
-		if record.Name != userName {
-			continue
-		}
-		for _, role := range record.Roles {
-			if role == security.RoleAdmin {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (s *cliSession) executeCommand(cmd cliCommand) error {
@@ -818,13 +816,6 @@ func (s *cliSession) executeCommand(cmd cliCommand) error {
 	}
 }
 
-func (s *cliSession) requireAdmin() error {
-	if !s.loggedAdmin {
-		return errors.New("unauthorized: admin authentication required")
-	}
-	return nil
-}
-
 func (s *cliSession) requireCollection() (string, error) {
 	name := strings.TrimSpace(s.currentCollection)
 	if name == "" {
@@ -846,4 +837,189 @@ func (s *cliSession) ensureConnected() error {
 		return errors.New("not connected to server")
 	}
 	return nil
+}
+
+type cliUserCreateResult struct {
+	name   string
+	roles  []string
+	keyID  string
+	apiKey string
+}
+
+type cliUserPasswordResult struct {
+	name   string
+	keyID  string
+	apiKey string
+}
+
+type cliUserRecord struct {
+	name       string
+	roles      []string
+	disabled   bool
+	activeKeys int
+	totalKeys  int
+}
+
+func (s *cliSession) bootstrapHasUsers() (bool, error) {
+	if err := s.ensureConnected(); err != nil {
+		return false, err
+	}
+	ctx, cancel := s.rpcContext()
+	defer cancel()
+	var out structpb.Struct
+	if err := s.conn.Invoke(ctx, adminapi.FullMethodBootstrapStatus, &emptypb.Empty{}, &out); err != nil {
+		return false, err
+	}
+	value := out.GetFields()["has_users"]
+	if value == nil {
+		return false, errors.New("invalid bootstrap status response")
+	}
+	return value.GetBoolValue(), nil
+}
+
+func (s *cliSession) adminCreateUser(name, secret string, admin bool) (cliUserCreateResult, error) {
+	if err := s.ensureConnected(); err != nil {
+		return cliUserCreateResult{}, err
+	}
+	ctx, cancel := s.rpcContext()
+	defer cancel()
+	in, err := structpb.NewStruct(map[string]any{
+		"name":   name,
+		"secret": secret,
+		"admin":  admin,
+	})
+	if err != nil {
+		return cliUserCreateResult{}, err
+	}
+	var out structpb.Struct
+	if err := s.conn.Invoke(ctx, adminapi.FullMethodCreateUser, in, &out); err != nil {
+		return cliUserCreateResult{}, err
+	}
+	result := cliUserCreateResult{
+		name:   structFieldString(&out, "name"),
+		keyID:  structFieldString(&out, "key_id"),
+		apiKey: structFieldString(&out, "api_key"),
+	}
+	result.roles = structStringList(&out, "roles")
+	return result, nil
+}
+
+func (s *cliSession) adminAlterUserPassword(name, secret string) (cliUserPasswordResult, error) {
+	if err := s.ensureConnected(); err != nil {
+		return cliUserPasswordResult{}, err
+	}
+	ctx, cancel := s.rpcContext()
+	defer cancel()
+	in, err := structpb.NewStruct(map[string]any{
+		"name":   name,
+		"secret": secret,
+	})
+	if err != nil {
+		return cliUserPasswordResult{}, err
+	}
+	var out structpb.Struct
+	if err := s.conn.Invoke(ctx, adminapi.FullMethodAlterUserPassword, in, &out); err != nil {
+		return cliUserPasswordResult{}, err
+	}
+	return cliUserPasswordResult{
+		name:   structFieldString(&out, "name"),
+		keyID:  structFieldString(&out, "key_id"),
+		apiKey: structFieldString(&out, "api_key"),
+	}, nil
+}
+
+func (s *cliSession) adminDropUser(name string) error {
+	if err := s.ensureConnected(); err != nil {
+		return err
+	}
+	ctx, cancel := s.rpcContext()
+	defer cancel()
+	in, err := structpb.NewStruct(map[string]any{"name": name})
+	if err != nil {
+		return err
+	}
+	return s.conn.Invoke(ctx, adminapi.FullMethodDropUser, in, &emptypb.Empty{})
+}
+
+func (s *cliSession) adminListUsers() ([]cliUserRecord, error) {
+	if err := s.ensureConnected(); err != nil {
+		return nil, err
+	}
+	ctx, cancel := s.rpcContext()
+	defer cancel()
+	var out structpb.Struct
+	if err := s.conn.Invoke(ctx, adminapi.FullMethodListUsers, &emptypb.Empty{}, &out); err != nil {
+		return nil, err
+	}
+	usersValue := out.GetFields()["users"]
+	if usersValue == nil {
+		return nil, nil
+	}
+	list := usersValue.GetListValue()
+	if list == nil {
+		return nil, errors.New("invalid users payload")
+	}
+	records := make([]cliUserRecord, 0, len(list.Values))
+	for _, item := range list.Values {
+		userStruct := item.GetStructValue()
+		if userStruct == nil {
+			continue
+		}
+		records = append(records, cliUserRecord{
+			name:       structFieldString(userStruct, "name"),
+			roles:      structStringList(userStruct, "roles"),
+			disabled:   structFieldBool(userStruct, "disabled"),
+			activeKeys: int(structFieldNumber(userStruct, "active_keys")),
+			totalKeys:  int(structFieldNumber(userStruct, "total_keys")),
+		})
+	}
+	return records, nil
+}
+
+func structStringList(payload interface {
+	GetFields() map[string]*structpb.Value
+}, field string) []string {
+	values := payload.GetFields()[field]
+	if values == nil || values.GetListValue() == nil {
+		return nil
+	}
+	out := make([]string, 0, len(values.GetListValue().Values))
+	for _, item := range values.GetListValue().Values {
+		value := strings.TrimSpace(item.GetStringValue())
+		if value == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func structFieldString(payload interface {
+	GetFields() map[string]*structpb.Value
+}, field string) string {
+	value := payload.GetFields()[field]
+	if value == nil {
+		return ""
+	}
+	return strings.TrimSpace(value.GetStringValue())
+}
+
+func structFieldBool(payload interface {
+	GetFields() map[string]*structpb.Value
+}, field string) bool {
+	value := payload.GetFields()[field]
+	if value == nil {
+		return false
+	}
+	return value.GetBoolValue()
+}
+
+func structFieldNumber(payload interface {
+	GetFields() map[string]*structpb.Value
+}, field string) float64 {
+	value := payload.GetFields()[field]
+	if value == nil {
+		return 0
+	}
+	return value.GetNumberValue()
 }

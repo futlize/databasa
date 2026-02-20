@@ -3,7 +3,7 @@ package main
 import "testing"
 
 func TestParseCLICommandCreateUserAdmin(t *testing.T) {
-	cmd, err := parseCLICommand("CREATE USER alice PASSWORD 's3cret' ADMIN;")
+	cmd, err := parseCLICommand("CREATE USER alice PASSWORD ADMIN;")
 	if err != nil {
 		t.Fatalf("parse failed: %v", err)
 	}
@@ -14,11 +14,11 @@ func TestParseCLICommandCreateUserAdmin(t *testing.T) {
 	if create.Name != "alice" {
 		t.Fatalf("unexpected user: %s", create.Name)
 	}
-	if create.Password != "s3cret" {
-		t.Fatalf("unexpected password payload: %s", create.Password)
+	if create.Password != "" {
+		t.Fatalf("expected empty literal password payload")
 	}
-	if create.PromptPassword {
-		t.Fatalf("expected prompt_password=false when literal password is provided")
+	if !create.PromptPassword {
+		t.Fatalf("expected prompt_password=true")
 	}
 	if !create.Admin {
 		t.Fatalf("expected admin=true")
@@ -68,23 +68,15 @@ func TestParseCLICommandAlterUserPromptPassword(t *testing.T) {
 	}
 }
 
-func TestParseCLICommandAlterUserLiteralPassword(t *testing.T) {
-	cmd, err := parseCLICommand("ALTER USER alice PASSWORD 'n3w';")
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
+func TestParseCLICommandRejectInlineCreateUserPassword(t *testing.T) {
+	if _, err := parseCLICommand("CREATE USER alice PASSWORD 'secret' ADMIN;"); err == nil {
+		t.Fatalf("expected parse error for inline create user password")
 	}
-	alter, ok := cmd.(cliCmdAlterUserPassword)
-	if !ok {
-		t.Fatalf("unexpected command type %T", cmd)
-	}
-	if alter.Name != "alice" {
-		t.Fatalf("unexpected user: %s", alter.Name)
-	}
-	if alter.Password != "n3w" {
-		t.Fatalf("unexpected password payload: %s", alter.Password)
-	}
-	if alter.PromptPassword {
-		t.Fatalf("expected prompt_password=false when literal password is provided")
+}
+
+func TestParseCLICommandRejectInlineAlterUserPassword(t *testing.T) {
+	if _, err := parseCLICommand("ALTER USER alice PASSWORD 'secret';"); err == nil {
+		t.Fatalf("expected parse error for inline alter user password")
 	}
 }
 

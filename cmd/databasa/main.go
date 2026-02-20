@@ -150,6 +150,7 @@ func runServer(args []string) {
 
 	grpcServer := grpc.NewServer(grpcOptions...)
 	pb.RegisterDatabasaServer(grpcServer, srv)
+	registerAdminService(grpcServer, security.NewManager(security.AuthStorePath(cfg.Storage.DataDir)), cfg.Guardrails.RequireRPCDeadline)
 
 	if cfg.Server.EnableReflection {
 		reflection.Register(grpcServer)

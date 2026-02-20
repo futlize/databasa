@@ -10,77 +10,45 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/futlize/databasa/internal/security"
 	pb "github.com/futlize/databasa/pkg/pb"
 )
 
 func (s *cliSession) execCreateUser(cmd cliCmdCreateUser) error {
-	if err := s.requireAdmin(); err != nil {
-		bootstrap, bootstrapErr := s.isBootstrapUserCreation()
-		if bootstrapErr != nil {
-			return err
-		}
-		if !bootstrap {
-			return err
-		}
-		if !cmd.Admin {
-			return errors.New("first user bootstrap must include ADMIN role")
-		}
-		fmt.Fprintln(s.out, "bootstrap mode: creating first admin user without prior login")
-	}
 	secret, err := s.resolveUserSecret(cmd.Password, cmd.PromptPassword)
 	if err != nil {
 		return err
 	}
-	roles := []security.Role{security.RoleRead}
-	if cmd.Admin {
-		roles = []security.Role{security.RoleAdmin}
-	}
-	user, generated, err := s.manager.CreateUserWithPassword(cmd.Name, roles, "password", secret)
+	created, err := s.adminCreateUser(cmd.Name, secret, cmd.Admin)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(s.out, "created user: %s (roles=%s)\n", user.Name, rolesToText(user.Roles))
-	fmt.Fprintf(s.out, "key id: %s\n", generated.KeyID)
-	fmt.Fprintf(s.out, "api key (shown once): %s\n", generated.Plaintext)
+	fmt.Fprintf(s.out, "created user: %s (roles=%s)\n", created.name, rolesToText(created.roles))
+	fmt.Fprintf(s.out, "key id: %s\n", created.keyID)
+	fmt.Fprintf(s.out, "api key (shown once): %s\n", created.apiKey)
 	fmt.Fprintln(s.out, "store this api key securely. Databasa never stores plaintext keys.")
 	return nil
 }
 
-func (s *cliSession) isBootstrapUserCreation() (bool, error) {
-	records, err := s.manager.ListUsers()
-	if err != nil {
-		return false, err
-	}
-	return len(records) == 0, nil
-}
-
 func (s *cliSession) execAlterUserPassword(cmd cliCmdAlterUserPassword) error {
-	if err := s.requireAdmin(); err != nil {
-		return err
-	}
 	secret, err := s.resolveUserSecret(cmd.Password, cmd.PromptPassword)
 	if err != nil {
 		return err
 	}
-	generated, err := s.manager.AlterUserPassword(cmd.Name, "password", secret)
+	updated, err := s.adminAlterUserPassword(cmd.Name, secret)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(s.out, "updated password for user %s (new key id=%s)\n", cmd.Name, generated.KeyID)
-	fmt.Fprintf(s.out, "api key (shown once): %s\n", generated.Plaintext)
+	fmt.Fprintf(s.out, "updated password for user %s (new key id=%s)\n", updated.name, updated.keyID)
+	fmt.Fprintf(s.out, "api key (shown once): %s\n", updated.apiKey)
 	fmt.Fprintln(s.out, "store this api key securely. Databasa never stores plaintext keys.")
 	return nil
 }
 
 func (s *cliSession) execDropUser(cmd cliCmdDropUser) error {
-	if err := s.requireAdmin(); err != nil {
-		return err
-	}
 	if strings.EqualFold(strings.TrimSpace(cmd.Name), strings.TrimSpace(s.loggedUser)) {
 		return errors.New("cannot drop currently authenticated user")
 	}
-	if err := s.manager.DeleteUser(cmd.Name); err != nil {
+	if err := s.adminDropUser(cmd.Name); err != nil {
 		return err
 	}
 	fmt.Fprintf(s.out, "dropped user %s\n", cmd.Name)
@@ -88,27 +56,34 @@ func (s *cliSession) execDropUser(cmd cliCmdDropUser) error {
 }
 
 func (s *cliSession) execListUsers() error {
-	if err := s.requireAdmin(); err != nil {
-		return err
-	}
-	records, err := s.manager.ListUsers()
+	records, err := s.adminListUsers()
 	if err != nil {
 		return err
 	}
 
 	switch s.format {
 	case cliFormatJSON:
-		return printJSON(s.out, records)
+		items := make([]map[string]any, 0, len(records))
+		for _, record := range records {
+			items = append(items, map[string]any{
+				"name":        record.name,
+				"roles":       record.roles,
+				"disabled":    record.disabled,
+				"active_keys": record.activeKeys,
+				"total_keys":  record.totalKeys,
+			})
+		}
+		return printJSON(s.out, items)
 	case cliFormatCSV:
 		rows := make([][]string, 0, len(records)+1)
 		rows = append(rows, []string{"name", "roles", "disabled", "active_keys", "total_keys"})
 		for _, record := range records {
 			rows = append(rows, []string{
-				record.Name,
-				rolesToText(record.Roles),
-				strconv.FormatBool(record.Disabled),
-				strconv.Itoa(record.ActiveKeys),
-				strconv.Itoa(record.TotalKeys),
+				record.name,
+				rolesToText(record.roles),
+				strconv.FormatBool(record.disabled),
+				strconv.Itoa(record.activeKeys),
+				strconv.Itoa(record.totalKeys),
 			})
 		}
 		return printCSVRows(s.out, rows)
@@ -116,11 +91,11 @@ func (s *cliSession) execListUsers() error {
 		rows := make([][]string, 0, len(records))
 		for _, record := range records {
 			rows = append(rows, []string{
-				record.Name,
-				rolesToText(record.Roles),
-				strconv.FormatBool(record.Disabled),
-				strconv.Itoa(record.ActiveKeys),
-				strconv.Itoa(record.TotalKeys),
+				record.name,
+				rolesToText(record.roles),
+				strconv.FormatBool(record.disabled),
+				strconv.Itoa(record.activeKeys),
+				strconv.Itoa(record.totalKeys),
 			})
 		}
 		printTable(s.out, []string{"name", "roles", "disabled", "active_keys", "total_keys"}, rows)
@@ -556,10 +531,10 @@ func metricFromText(raw string) (pb.Metric, error) {
 	}
 }
 
-func rolesToText(roles []security.Role) string {
+func rolesToText(roles []string) string {
 	out := make([]string, 0, len(roles))
 	for _, role := range roles {
-		out = append(out, string(role))
+		out = append(out, role)
 	}
 	return strings.Join(out, ",")
 }
@@ -574,10 +549,10 @@ func floatSliceToText(values []float32) string {
 
 func (s *cliSession) resolveUserSecret(literal string, prompt bool) (string, error) {
 	if !prompt {
-		if strings.TrimSpace(literal) == "" {
-			return "", errors.New("api key secret cannot be empty")
-		}
-		return literal, nil
+		return "", errors.New("inline PASSWORD literal is disabled; omit value after PASSWORD")
+	}
+	if strings.TrimSpace(literal) != "" {
+		return "", errors.New("inline PASSWORD literal is disabled; omit value after PASSWORD")
 	}
 
 	secret, err := promptHidden("new api key secret: ")
