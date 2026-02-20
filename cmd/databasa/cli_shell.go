@@ -90,9 +90,10 @@ func runCLI(args []string) error {
 		return fmt.Errorf("unexpected trailing arguments: %s", strings.Join(flagSet.Args(), " "))
 	}
 
-	cfg, _, err := LoadOrCreateConfig(*configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+	cfg, _, cfgErr := loadCLIConfig(*configPath)
+	if cfgErr != nil {
+		cfg = defaultCLIConfig()
+		fmt.Fprintf(os.Stderr, "warning: unable to read config %q (%v); using cli defaults (addr=127.0.0.1:50051, tls=on, auth=on)\n", *configPath, cfgErr)
 	}
 
 	targetAddr := strings.TrimSpace(*addr)
@@ -197,6 +198,34 @@ func runCLI(args []string) error {
 			fmt.Fprintf(session.out, "time: %s\n", time.Since(start).Truncate(time.Microsecond))
 		}
 	}
+}
+
+func loadCLIConfig(path string) (AppConfig, bool, error) {
+	cfg := DefaultAppConfig()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return cfg, false, nil
+		}
+		return cfg, false, fmt.Errorf("read config %q: %w", path, err)
+	}
+	if len(data) > 0 {
+		if err := parseConfig(data, &cfg); err != nil {
+			return cfg, false, fmt.Errorf("parse config %q: %w", path, err)
+		}
+	}
+	cfg.normalize()
+	return cfg, true, nil
+}
+
+func defaultCLIConfig() AppConfig {
+	cfg := DefaultAppConfig()
+	// Service installs run with TLS/auth enabled; this fallback keeps CLI usable
+	// when /etc/databasa/databasa.toml is unreadable for non-root users.
+	cfg.Security.TLSEnabled = true
+	cfg.Security.AuthEnabled = true
+	cfg.Security.RequireAuth = true
+	return cfg
 }
 
 func parseCLITLSMode(raw string) (bool, error) {

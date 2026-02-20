@@ -30,6 +30,9 @@ databasa --cli \
 - History is persisted per user in the OS config directory under `databasa/cli_history`.
 - The shell connects immediately on startup and, when auth is required, prompts credentials before opening the prompt.
 - If no users exist on the server auth store, startup enters bootstrap flow to create the first admin user.
+- If the configured file cannot be read (for example `/etc/databasa/databasa.toml` permission denied), CLI falls back to local defaults instead of failing:
+  - `127.0.0.1:50051`
+  - TLS/auth enabled by default
 
 ## Startup flow
 
